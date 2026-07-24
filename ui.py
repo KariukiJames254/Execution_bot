@@ -214,6 +214,14 @@ def add_log(level, message):
 
 @app.route("/")
 def dashboard():
+    # Auto-initialize MT5 if not connected
+    if not is_connected():
+        if not initialize():
+            logger.warning("MT5 initialization failed from UI")
+        else:
+            from config import MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH
+            login(MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH)
+
     connected = is_connected()
     account = get_account_details() if connected else None
     bid, ask = get_current_price(SYMBOL) if connected else (None, None)
