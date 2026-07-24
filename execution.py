@@ -164,13 +164,13 @@ def _get_digits(symbol):
 
 
 def _get_filling(symbol):
-    fill_mode = mt5.symbol_info_filling(symbol)
-    if fill_mode is None or fill_mode == 0:
+    fill_mask = mt5.symbol_info_filling(symbol)
+    if fill_mask is None or fill_mask == 0:
         return mt5.ORDER_FILLING_FOK
-    if fill_mode == 1:
+    if fill_mask & 1:
         return mt5.ORDER_FILLING_FOK
-    if fill_mode == 2:
+    if fill_mask & 2:
         return mt5.ORDER_FILLING_IOC
-    if fill_mode == 3:
+    if fill_mask & 4:
         return mt5.ORDER_FILLING_RETURN
     return mt5.ORDER_FILLING_FOK
