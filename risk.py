@@ -1,159 +1,10 @@
+import MetaTrader5 as mt5
 from logger import setup_logger
 
 logger = setup_logger("risk")
 
 
-def calculate_stop_loss(entry_price, sl_pips, order_type):
-    symbol_info = _get_symbol_info()
-    if symbol_info is None:
-        return entry_price
-
-    point = symbol_info.point
-    digits = symbol_info.digits
-
-    if order_type == "BUY":
-        sl = round(entry_price - sl_pips * point, digits)
-    else:
-        sl = round(entry_price + sl_pips * point, digits)
-
-    logger.info(f"Stop Loss calculated: {order_type} entry={entry_price}, SL={sl}, {sl_pips}pips")
-    return sl
-
-
-def calculate_take_profit(entry_price, sl_pips, order_type, reward_ratio=5):
-    tp_pips = sl_pips * reward_ratio
-    symbol_info = _get_symbol_info()
-    if symbol_info is None:
-        return entry_price
-
-    point = symbol_info.point
-    digits = symbol_info.digits
-
-    if order_type == "BUY":
-        tp = round(entry_price + tp_pips * point, digits)
-    else:
-        tp = round(entry_price - tp_pips * point, digits)
-
-    logger.info(
-        f"Take Profit calculated: {order_type} entry={entry_price}, "
-        f"TP={tp}, {tp_pips}pips ({reward_ratio}:1 ratio)"
-    )
-    return tp
-
-
-def calculate_lot_from_risk(entry_price, sl_price, risk_amount, symbol=None):
-    if symbol is None:
-        from config import SYMBOL
-        symbol = SYMBOL
-
-    if sl_price == entry_price:
-        logger.error("Stop Loss equals Entry price, cannot calculate lot size")
-        return 0.01
-
-    symbol_info = _get_symbol_info(symbol)
-    if symbol_info is None:
-        return 0.01
-
-    point = symbol_info.point
-    digits = symbol_info.digits
-    pip_size = point * 10 if point < 0.01 else point
-
-    distance_pips = abs(entry_price - sl_price) / pip_size
-    if distance_pips <= 0:
-        return 0.01
-
-    tick_info = _get_tick_info(symbol)
-    if tick_info is None:
-        return 0.01
-
-    pip_value = _get_pip_value(symbol, tick_info)
-    if pip_value <= 0:
-        return 0.01
-
-    lot_size = risk_amount / (distance_pips * pip_value)
-    lot_size = round_to_lot_step(lot_size, symbol)
-    lot_size = max(lot_size, _get_min_lot(symbol))
-    lot_size = min(lot_size, _get_max_lot(symbol))
-
-    logger.info(
-        f"Lot from risk: entry={entry_price}, SL={sl_price}, "
-        f"distance={distance_pips}pips, pip_value={pip_value}, "
-        f"risk=${risk_amount}, lot={lot_size}"
-    )
-    return lot_size
-
-
-def calculate_lot_size(symbol, risk_percent, sl_pips, fixed_lot=None):
-    if fixed_lot is not None:
-        logger.info(f"Using fixed lot size: {fixed_lot}")
-        return fixed_lot
-
-    account_info = _get_account_info()
-    if account_info is None:
-        return 0.01
-
-    balance = account_info.balance
-    risk_amount = balance * (risk_percent / 100.0)
-
-    tick_info = _get_tick_info(symbol)
-    if tick_info is None:
-        return 0.01
-
-    pip_value = _get_pip_value(symbol, tick_info)
-    if pip_value <= 0:
-        return 0.01
-
-    lot_size = risk_amount / (sl_pips * pip_value)
-    lot_size = round_to_lot_step(lot_size, symbol)
-    lot_size = max(lot_size, _get_min_lot(symbol))
-    lot_size = min(lot_size, _get_max_lot(symbol))
-
-    logger.info(
-        f"Lot size calculated: balance={balance}, risk={risk_percent}%, "
-        f"sl={sl_pips}pips, pip_value={pip_value}, lot={lot_size}"
-    )
-    return lot_size
-
-
-def round_to_lot_step(lot_size, symbol):
-    symbol_info = _get_symbol_info(symbol)
-    if symbol_info is None:
-        return round(lot_size, 2)
-    step = symbol_info.volume_step
-    if step <= 0:
-        return round(lot_size, 2)
-    return round(lot_size / step) * step
-
-
-def _get_account_info():
-    import MetaTrader5 as mt5
-    info = mt5.account_info()
-    if info is None:
-        logger.error("Failed to get account info")
-    return info
-
-
-def _get_tick_info(symbol):
-    import MetaTrader5 as mt5
-    tick = mt5.symbol_info_tick(symbol)
-    if tick is None:
-        logger.error(f"Failed to get tick info for {symbol}")
-    return tick
-
-
-def _get_pip_value(symbol, tick_info):
-    import MetaTrader5 as mt5
-    symbol_info = _get_symbol_info(symbol)
-    if symbol_info is None:
-        return 0.0
-    tick_value = tick_info.value
-    if tick_value <= 0:
-        tick_value = 0.01 * symbol_info.point * 100000
-    return tick_value / (symbol_info.point * 10000000) if symbol_info.point > 0 else tick_value
-
-
-def _get_symbol_info(symbol=None):
-    import MetaTrader5 as mt5
+def _symbol_info(symbol=None):
     if symbol is None:
         from config import SYMBOL
         symbol = SYMBOL
@@ -163,15 +14,189 @@ def _get_symbol_info(symbol=None):
     return info
 
 
-def _get_min_lot(symbol):
-    info = _get_symbol_info(symbol)
+def _tick_info(symbol=None):
+    if symbol is None:
+        from config import SYMBOL
+        symbol = SYMBOL
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        logger.error(f"Failed to get tick for {symbol}")
+    return tick
+
+
+def _account_info():
+    info = mt5.account_info()
+    if info is None:
+        logger.error("Failed to get account info")
+    return info
+
+
+def calculate_sl(entry_price, sl_distance_pips, order_type):
+    info = _symbol_info()
+    if info is None:
+        return entry_price
+    point = info.point
+    digits = info.digits
+    if order_type == "BUY":
+        return round(entry_price - sl_distance_pips * point, digits)
+    return round(entry_price + sl_distance_pips * point, digits)
+
+
+def calculate_tp(entry_price, sl_distance_pips, order_type, reward_ratio=2):
+    tp_pips = sl_distance_pips * reward_ratio
+    info = _symbol_info()
+    if info is None:
+        return entry_price
+    point = info.point
+    digits = info.digits
+    if order_type == "BUY":
+        return round(entry_price + tp_pips * point, digits)
+    return round(entry_price - tp_pips * point, digits)
+
+
+def calculate_pips_between(entry, sl):
+    info = _symbol_info()
+    if info is None:
+        return 0.0
+    return abs(entry - sl) / info.point
+
+
+def get_pip_value(symbol=None):
+    tick = _tick_info(symbol)
+    if tick is None:
+        return 0.0
+    info = _symbol_info(symbol)
+    if info is None:
+        return 0.0
+    return tick.value / info.point
+
+
+def get_loss_per_lot(entry, sl):
+    tick = _tick_info()
+    if tick is None:
+        return 0.0
+    info = _symbol_info()
+    if info is None:
+        return 0.0
+    sl_distance_points = abs(entry - sl) / info.point
+    return tick.value * sl_distance_points
+
+
+def calculate_lot_from_risk(entry_price, sl_price, risk_amount, symbol=None):
+    if entry_price == sl_price:
+        logger.error("Entry equals Stop Loss, cannot calculate lot size")
+        return 0.01
+
+    info = _symbol_info(symbol)
     if info is None:
         return 0.01
-    return info.volume_min
+
+    tick = _tick_info(symbol)
+    if tick is None:
+        return 0.01
+
+    tick_value = tick.value
+    if tick_value <= 0:
+        logger.warning(f"Tick value is {tick_value}, using fallback for {symbol or 'default'}")
+        point = info.point
+        tick_value = 0.01 * point * 100000
+
+    sl_distance_points = abs(entry_price - sl_price) / info.point
+    loss_per_lot = tick_value * sl_distance_points
+
+    if loss_per_lot <= 0:
+        return 0.01
+
+    lot_size = risk_amount / loss_per_lot
+    lot_size = _round_to_lot_step(lot_size, symbol)
+    lot_size = max(lot_size, info.volume_min)
+    lot_size = min(lot_size, info.volume_max)
+    lot_size = round(lot_size, 2)
+
+    logger.info(
+        f"Lot from risk: {symbol} entry={entry_price} SL={sl_price} "
+        f"dist={sl_distance_points:.0f}pts tick_val=${tick_value:.4f}/pt "
+        f"loss/lot=${loss_per_lot:.4f} risk=${risk_amount} -> lot={lot_size}"
+    )
+    return lot_size
 
 
-def _get_max_lot(symbol):
-    info = _get_symbol_info(symbol)
+def calculate_lot_percentage(symbol, risk_percent, sl_distance_pips, fixed_lot=None):
+    if fixed_lot is not None:
+        return fixed_lot
+
+    account = _account_info()
+    if account is None:
+        return 0.01
+
+    risk_amount = account.balance * (risk_percent / 100.0)
+    info = _symbol_info(symbol)
     if info is None:
-        return 100.0
-    return info.volume_max
+        return 0.01
+
+    point = info.point
+    tick = _tick_info(symbol)
+    if tick is None:
+        return 0.01
+
+    tick_value = tick.value
+    if tick_value <= 0:
+        tick_value = 0.01 * point * 100000
+
+    sl_distance_points = sl_distance_pips * (0.0001 / point) if point < 0.01 else sl_distance_pips
+    loss_per_lot = tick_value * sl_distance_points
+
+    if loss_per_lot <= 0:
+        return 0.01
+
+    lot_size = risk_amount / loss_per_lot
+    lot_size = _round_to_lot_step(lot_size, symbol)
+    lot_size = max(lot_size, info.volume_min)
+    lot_size = min(lot_size, info.volume_max)
+    lot_size = round(lot_size, 2)
+
+    logger.info(
+        f"Lot from % risk: {symbol} balance={account.balance} "
+        f"risk={risk_percent}% amount=${risk_amount:.2f} "
+        f"sl={sl_distance_pips}pips loss/lot=${loss_per_lot:.4f} -> lot={lot_size}"
+    )
+    return lot_size
+
+
+def _round_to_lot_step(lot_size, symbol):
+    info = _symbol_info(symbol)
+    if info is None:
+        return round(lot_size, 2)
+    step = info.volume_step
+    if step <= 0 or step == 1:
+        return round(lot_size, 2)
+    return round(lot_size / step) * step
+
+
+def get_risk_summary(entry_price, sl_price, risk_amount, symbol=None):
+    info = _symbol_info(symbol)
+    if info is None:
+        return None
+
+    sl_distance = abs(entry_price - sl_price)
+    sl_distance_pips = sl_distance / info.point
+
+    tick = _tick_info(symbol)
+    tick_value = tick.value if tick else 0.0
+    loss_per_lot = tick_value * sl_distance_pips
+
+    lot_size = calculate_lot_from_risk(entry_price, sl_price, risk_amount, symbol)
+    actual_risk = loss_per_lot * lot_size
+
+    return {
+        "symbol": symbol,
+        "entry": entry_price,
+        "sl": sl_price,
+        "sl_distance_pips": round(sl_distance_pips, 1),
+        "tick_value": round(tick_value, 6),
+        "loss_per_lot": round(loss_per_lot, 4),
+        "risk_amount": risk_amount,
+        "lot_size": lot_size,
+        "actual_risk": round(actual_risk, 2),
+        "pip_value": round(get_pip_value(symbol), 6),
+    }

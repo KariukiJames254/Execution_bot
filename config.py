@@ -17,6 +17,7 @@ MAX_OPEN_POSITIONS = int(os.environ.get("MAX_OPEN_POSITIONS", "1"))
 
 SL_PIPS = int(os.environ.get("SL_PIPS", "50"))
 TP_PIPS = int(os.environ.get("TP_PIPS", "100"))
+RR_RATIO = float(os.environ.get("RR_RATIO", "2"))
 
 DEFAULT_RISK_AMOUNT = float(os.environ.get("DEFAULT_RISK_AMOUNT", "100"))
 
