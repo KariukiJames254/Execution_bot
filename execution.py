@@ -21,7 +21,7 @@ def execute_buy(symbol, lot, sl, tp, comment=""):
         "magic": 123456,
         "comment": comment,
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": _get_filling(symbol),
     }
     return _send_order(request, "BUY")
 
@@ -43,7 +43,7 @@ def execute_sell(symbol, lot, sl, tp, comment=""):
         "magic": 123456,
         "comment": comment,
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": _get_filling(symbol),
     }
     return _send_order(request, "SELL")
 
@@ -81,7 +81,7 @@ def close_position(position_ticket):
         "magic": 123456,
         "comment": "Close",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": _get_filling(symbol),
     }
     return _send_order(request, f"CLOSE {pos.type}")
 
@@ -116,7 +116,7 @@ def set_break_even(position_ticket, symbol):
         "magic": 123456,
         "comment": "Break-even",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": _get_filling(symbol),
     }
     result = _send_order(request, "BREAK-EVEN")
     return result is not None
@@ -161,3 +161,16 @@ def _get_digits(symbol):
     if info is None:
         return 5
     return info.digits
+
+
+def _get_filling(symbol):
+    fill_mode = mt5.symbol_info_filling(symbol)
+    if fill_mode is None or fill_mode == 0:
+        return mt5.ORDER_FILLING_FOK
+    if fill_mode == 1:
+        return mt5.ORDER_FILLING_FOK
+    if fill_mode == 2:
+        return mt5.ORDER_FILLING_IOC
+    if fill_mode == 3:
+        return mt5.ORDER_FILLING_RETURN
+    return mt5.ORDER_FILLING_FOK
