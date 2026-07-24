@@ -62,6 +62,12 @@ def api_status():
     })
 
 
+@app.route("/api/price")
+def api_price():
+    bid, ask = get_current_price(SYMBOL)
+    return jsonify({"bid": bid, "ask": ask})
+
+
 @app.route("/api/positions")
 def api_positions():
     if not is_connected():
@@ -122,6 +128,10 @@ def api_trade():
         entry = data.get("entry")
         sl_price = data.get("sl_price")
         tp_price = data.get("tp_price")
+
+        if not is_connected():
+            initialize()
+            login_from_config()
 
         if not is_connected():
             return jsonify({"message": "Not connected to MT5"}), 400
