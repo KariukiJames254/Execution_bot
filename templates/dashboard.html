@@ -183,9 +183,9 @@ function recalculate() {
   var tpCalc = 0;
   var direction = document.getElementById('direction').value;
   if (direction === 'BUY') {
-    tpCalc = sl + diff * rr;
+    tpCalc = entry + diff * rr;
   } else {
-    tpCalc = sl - diff * rr;
+    tpCalc = entry - diff * rr;
   }
 
   document.getElementById('calc_distance').textContent = distPips.toFixed(1) + ' pips';
@@ -258,6 +258,23 @@ function executeTrade(dir) {
     return;
   }
 
+  if (dir === 'BUY' && sl >= entry) {
+    alert('For BUY, Stop Loss must be below Entry price.');
+    return;
+  }
+  if (dir === 'SELL' && sl <= entry) {
+    alert('For SELL, Stop Loss must be above Entry price.');
+    return;
+  }
+
+  var dist = Math.abs(entry - sl);
+  var tp;
+  if (dir === 'BUY') {
+    tp = entry + dist * rr;
+  } else {
+    tp = entry - dist * rr;
+  }
+
   fetch('/api/calc_lot', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -267,13 +284,6 @@ function executeTrade(dir) {
   .then(function(data) {
     if (data.lot && data.lot > 0) {
       var lot = data.lot;
-      var dist = Math.abs(entry - sl);
-      var tp;
-      if (dir === 'BUY') {
-        tp = sl + dist * rr;
-      } else {
-        tp = sl - dist * rr;
-      }
       fetch('/api/trade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
