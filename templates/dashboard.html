@@ -247,24 +247,45 @@ function refreshData() {
 }
 
 function executeTrade(dir) {
-  document.getElementById('direction').value = dir;
-  var lotText = document.getElementById('calc_lot').textContent;
-  var lot = parseFloat(lotText);
   var entry = parseFloat(document.getElementById('entry_price').value);
   var sl = parseFloat(document.getElementById('sl_price').value);
+  var riskAmt = parseFloat(document.getElementById('risk_amount').value);
+  var isPct = document.getElementById('risk_pct').checked;
+  var rr = parseFloat(document.getElementById('rr_ratio').value);
 
-  if (!lot || lot <= 0) {
-    alert('Cannot calculate lot size. Check Entry and Stop Loss prices.');
+  if (!entry || !sl || entry === sl || !riskAmt) {
+    alert('Please fill in Entry, Stop Loss, and Risk Amount first.');
     return;
   }
 
-  fetch('/api/trade', {
+  fetch('/api/calc_lot', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ direction: dir, lot: lot, entry: entry, sl_price: sl })
+    body: JSON.stringify({ entry: entry, sl: sl, risk_amount: riskAmt, risk_mode: isPct ? 'pct' : 'amt' })
   })
   .then(function(r) { return r.json(); })
-  .then(function(data) { alert(data.message); })
+  .then(function(data) {
+    if (data.lot && data.lot > 0) {
+      var lot = data.lot;
+      var dist = Math.abs(entry - sl);
+      var tp;
+      if (dir === 'BUY') {
+        tp = sl + dist * rr;
+      } else {
+        tp = sl - dist * rr;
+      }
+      fetch('/api/trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction: dir, lot: lot, entry: entry, sl_price: sl, tp_price: tp })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data2) { alert(data2.message); })
+      .catch(function(e) { alert('Error: ' + e); });
+    } else {
+      alert('Cannot calculate lot size. Check Entry and Stop Loss prices.');
+    }
+  })
   .catch(function(e) { alert('Error: ' + e); });
 }
 

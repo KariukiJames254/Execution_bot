@@ -4,7 +4,7 @@ from datetime import datetime
 from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT
 from broker import initialize, login, shutdown as broker_shutdown, is_connected, get_account_details
 from market import get_current_price, get_previous_candle
-from execution import get_open_positions, close_position, set_break_even
+from execution import get_open_positions, close_position, set_break_even, execute_buy, execute_sell
 from risk import calculate_lot_from_risk, calculate_sl, calculate_tp
 from logger import setup_logger
 
@@ -121,6 +121,7 @@ def api_trade():
         lot = data.get("lot", 0.01)
         entry = data.get("entry")
         sl_price = data.get("sl_price")
+        tp_price = data.get("tp_price")
 
         if not is_connected():
             return jsonify({"message": "Not connected to MT5"}), 400
@@ -128,45 +129,34 @@ def api_trade():
         if len(get_open_positions(SYMBOL)) > 0:
             return jsonify({"message": "Position already open"}), 400
 
-        if not entry or not sl_price:
-            return jsonify({"message": "Missing entry or stop loss price"}), 400
+        if not entry or not sl_price or not tp_price:
+            return jsonify({"message": "Missing price values"}), 400
 
         try:
             entry = float(entry)
             sl_price = float(sl_price)
+            tp_price = float(tp_price)
         except (TypeError, ValueError):
             return jsonify({"message": "Invalid price values"}), 400
 
         if entry == sl_price:
             return jsonify({"message": "Stop Loss cannot equal Entry price"}), 400
 
-        sl = calculate_stop_loss(entry, calculate_pips(entry, sl_price), direction)
-        tp = calculate_take_profit(entry, calculate_pips(entry, sl_price), direction)
-
         from execution import execute_buy, execute_sell
         if direction == "BUY":
-            result = execute_buy(SYMBOL, lot, sl, tp, comment="UI Trade")
+            result = execute_buy(SYMBOL, lot, sl_price, tp_price, comment="UI Trade")
         else:
-            result = execute_sell(SYMBOL, lot, sl, tp, comment="UI Trade")
+            result = execute_sell(SYMBOL, lot, sl_price, tp_price, comment="UI Trade")
 
         if result and result.retcode == 0:
-            add_log("success", f"{direction} {lot} {SYMBOL} @ {entry} SL={sl} TP={tp}")
+            add_log("success", f"{direction} {lot} {SYMBOL} entry={entry} SL={sl_price} TP={tp_price}")
             return jsonify({"message": f"{direction} trade executed successfully"})
         else:
             add_log("error", f"{direction} trade failed")
             return jsonify({"message": "Trade failed"}), 500
     except Exception as e:
-        logger.error(f"Trade error: {e}")
+        logger.error("Trade error: " + str(e))
         return jsonify({"message": "Error: " + str(e)}), 500
-
-
-def calculate_pips(entry, sl):
-    diff = abs(entry - sl)
-    if diff >= 0.01:
-        return round(diff / 0.01, 2)
-    elif diff >= 0.001:
-        return round(diff / 0.001, 1)
-    return round(diff / 0.0001, 0)
 
 
 def run_ui(host="0.0.0.0", port=5000):
