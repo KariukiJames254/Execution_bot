@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Execution Bot</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', Arial, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
+h1 { color: #58a6ff; margin-bottom: 20px; }
+h2 { color: #8b949e; margin: 15px 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; margin-bottom: 20px; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 15px; }
+.card label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+.card .value { font-size: 22px; font-weight: bold; margin-top: 5px; }
+.card .value.green { color: #3fb950; }
+.card .value.red { color: #f85149; }
+.card .value.blue { color: #58a6ff; }
+.btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; margin: 5px; }
+.btn-buy { background: #238636; color: #fff; }
+.btn-sell { background: #da3633; color: #fff; }
+.btn-exec { background: #238636; color: #fff; font-size: 16px; padding: 14px 40px; }
+.btn:hover { opacity: 0.85; }
+.form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-bottom: 10px; }
+.form-group { display: flex; flex-direction: column; }
+.form-group label { font-size: 11px; color: #8b949e; margin-bottom: 4px; }
+.form-group input, .form-group select { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px; border-radius: 4px; width: 130px; font-size: 13px; }
+.form-group .calc { color: #3fb950; font-weight: bold; font-size: 13px; margin-top: 4px; }
+.radio-group { display: flex; gap: 15px; align-items: center; }
+.radio-group label { font-size: 12px; color: #c9d1d9; cursor: pointer; }
+.radio-group input { width: auto; margin-right: 4px; }
+.log-box { background: #010409; border: 1px solid #30363d; border-radius: 8px; padding: 12px; height: 300px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 12px; line-height: 1.6; }
+.log-entry { padding: 2px 0; border-bottom: 1px solid #21262d; }
+.log-info { color: #58a6ff; }
+.log-warn { color: #d29922; }
+.log-error { color: #f85149; }
+.log-success { color: #3fb950; }
+.status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+.status-connected { background: #3fb950; }
+.status-disconnected { background: #f85149; }
+.risk-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+.risk-summary .card { text-align: center; }
+.risk-summary .card .value { font-size: 18px; }
+</style>
+</head>
+<body>
+<h1>&#x1F7E2; Execution Bot</h1>
+
+<h2>Connection</h2>
+<div class="grid">
+  <div class="card">
+    <label>Status</label>
+    <div class="value {{ 'green' if connected else 'red' }}">
+      <span class="status-dot {{ 'status-connected' if connected else 'status-disconnected' }}"></span>
+      {{ 'Connected' if connected else 'Disconnected' }}
+    </div>
+  </div>
+  <div class="card">
+    <label>Login</label>
+    <div class="value blue">{{ account_login or '---' }}</div>
+  </div>
+  <div class="card">
+    <label>Balance</label>
+    <div class="value green" id="balance">${{ '{:,.2f}'.format(account_balance) if account_balance else '---' }}</div>
+  </div>
+  <div class="card">
+    <label>Equity</label>
+    <div class="value green" id="equity">${{ '{:,.2f}'.format(account_equity) if account_equity else '---' }}</div>
+  </div>
+</div>
+
+<h2>Price</h2>
+<div class="grid">
+  <div class="card">
+    <label>Symbol</label>
+    <div class="value blue">{{ symbol }}</div>
+  </div>
+  <div class="card">
+    <label>Bid</label>
+    <div class="value" id="bid">${{ '{:.5f}'.format(bid) if bid else '---' }}</div>
+  </div>
+  <div class="card">
+    <label>Ask</label>
+    <div class="value" id="ask">${{ '{:.5f}'.format(ask) if ask else '---' }}</div>
+  </div>
+  <div class="card">
+    <label>Spread</label>
+    <div class="value" id="spread">---</div>
+  </div>
+</div>
+
+<h2>Risk Management</h2>
+<div class="card">
+  <div class="form-row">
+    <div class="form-group">
+      <label>Risk Mode</label>
+      <div class="radio-group">
+        <label><input type="radio" id="risk_pct" name="risk_mode" value="pct" onchange="toggleRiskMode()"> &percnt;</label>
+        <label><input type="radio" id="risk_amt" name="risk_mode" value="amt" checked onchange="toggleRiskMode()"> $</label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Risk Amount</label>
+      <input type="number" id="risk_amount" value="{{ default_risk }}" step="10" min="1">
+    </div>
+    <div class="form-group">
+      <label>Entry Price</label>
+      <input type="number" id="entry_price" step="0.00001" value="">
+    </div>
+    <div class="form-group">
+      <label>Stop Loss</label>
+      <input type="number" id="sl_price" step="0.00001" value="">
+    </div>
+    <div class="form-group">
+      <label>Risk / Reward</label>
+      <input type="number" id="rr_ratio" value="2" step="0.5" min="0.5">
+    </div>
+  </div>
+  <div class="risk-summary">
+    <div class="card">
+      <label>Distance</label>
+      <div class="value" id="calc_distance">0 pips</div>
+    </div>
+    <div class="card">
+      <label>Lot Size</label>
+      <div class="value green" id="calc_lot">0.00</div>
+    </div>
+    <div class="card">
+      <label>Take Profit</label>
+      <div class="value blue" id="calc_tp">---</div>
+    </div>
+    <div class="card">
+      <label>Risk $</label>
+      <div class="value" id="calc_risk">$0</div>
+    </div>
+  </div>
+  <div class="form-row" style="margin-top:10px;">
+    <button class="btn btn-exec" style="background:#238636;" onclick="executeTrade('BUY')">&#x25B2; BUY</button>
+    <button class="btn btn-exec" style="background:#da3633;" onclick="executeTrade('SELL')">&#x25BC; SELL</button>
+    <span id="calc_feedback" style="font-size:12px;color:#8b949e;"></span>
+  </div>
+</div>
+
+<h2>Open Positions</h2>
+<div class="card" id="positions">
+  <div style="color: #8b949e;">No positions loaded</div>
+</div>
+
+<h2>Bot Log</h2>
+<div class="log-box" id="log-box">
+  {% for entry in log_entries %}
+  <div class="log-entry {{ entry.level }}">{{ entry.time }} {{ entry.message }}</div>
+  {% endfor %}
+</div>
+
+<script>
+var cachedBid = null;
+var cachedAsk = null;
+
+function toggleRiskMode() {
+  recalculate();
+}
+
+function recalculate() {
+  var entry = parseFloat(document.getElementById('entry_price').value);
+  var sl = parseFloat(document.getElementById('sl_price').value);
+  var riskAmt = parseFloat(document.getElementById('risk_amount').value);
+  var rr = parseFloat(document.getElementById('rr_ratio').value);
+  var isPct = document.getElementById('risk_pct').checked;
+
+  if (!entry || !sl || entry === sl || !riskAmt) {
+    document.getElementById('calc_distance').textContent = '0 pips';
+    document.getElementById('calc_lot').textContent = '0.00';
+    document.getElementById('calc_tp').textContent = '---';
+    document.getElementById('calc_risk').textContent = '$0';
+    return;
+  }
+
+  var diff = Math.abs(entry - sl);
+  var distPips = diff / 0.0001;
+  if (diff >= 0.01) { distPips = diff / 0.01; }
+  else if (diff >= 0.001) { distPips = diff / 0.001; }
+  var tpCalc = 0;
+  var direction = document.getElementById('direction').value;
+  if (direction === 'BUY') {
+    tpCalc = sl + diff * rr;
+  } else {
+    tpCalc = sl - diff * rr;
+  }
+
+  document.getElementById('calc_distance').textContent = distPips.toFixed(1) + ' pips';
+  document.getElementById('calc_tp').textContent = tpCalc.toFixed(5);
+  document.getElementById('calc_risk').textContent = '$' + riskAmt.toFixed(2);
+
+  fetch('/api/calc_lot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entry: entry, sl: sl, risk_amount: riskAmt, risk_mode: isPct ? 'pct' : 'amt' })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.lot) {
+      document.getElementById('calc_lot').textContent = data.lot.toFixed(2);
+      document.getElementById('calc_risk').textContent = isPct ? '$' + (riskAmt * data.balance / 100).toFixed(2) : '$' + riskAmt.toFixed(2);
+    }
+  });
+}
+
+function refreshData() {
+  fetch('/api/status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      document.getElementById('status').innerHTML =
+        '<span class="status-dot ' + (data.connected ? 'status-connected' : 'status-disconnected') + '"></span>' +
+        (data.connected ? 'Connected' : 'Disconnected');
+      document.getElementById('balance').textContent = data.balance ? '$' + data.balance.toFixed(2) : '---';
+      document.getElementById('equity').textContent = data.equity ? '$' + data.equity.toFixed(2) : '---';
+      if (data.bid) {
+        document.getElementById('bid').textContent = data.bid.toFixed(5);
+        document.getElementById('ask').textContent = data.ask.toFixed(5);
+        document.getElementById('spread').textContent = ((data.ask - data.bid) * 10000).toFixed(1) + ' pips';
+        if (!document.getElementById('entry_price').value) {
+          document.getElementById('entry_price').value = data.ask.toFixed(5);
+        }
+        cachedBid = data.bid;
+        cachedAsk = data.ask;
+        recalculate();
+      }
+    });
+
+  fetch('/api/positions')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var el = document.getElementById('positions');
+      if (!data.length) { el.innerHTML = '<div style="color:#8b949e;">No open positions</div>'; return; }
+      el.innerHTML = data.map(function(p) {
+        return '<div style="padding:8px;border-bottom:1px solid #21262d;">' +
+          '<strong>' + (p.type == 0 ? 'BUY' : 'SELL') + '</strong> ' +
+          p.symbol + ' | Vol: ' + p.volume +
+          ' | Entry: ' + p.price_open.toFixed(5) +
+          ' | SL: ' + p.sl.toFixed(5) +
+          ' | TP: ' + p.tp.toFixed(5) +
+          ' | PnL: ' + p.profit.toFixed(2) +
+          '</div>';
+      }).join('');
+    });
+}
+
+function executeTrade(dir) {
+  document.getElementById('direction').value = dir;
+  var lotText = document.getElementById('calc_lot').textContent;
+  var lot = parseFloat(lotText);
+  var entry = parseFloat(document.getElementById('entry_price').value);
+  var sl = parseFloat(document.getElementById('sl_price').value);
+
+  if (!lot || lot <= 0) {
+    alert('Cannot calculate lot size. Check Entry and Stop Loss prices.');
+    return;
+  }
+
+  fetch('/api/trade', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ direction: dir, lot: lot, entry: entry, sl_price: sl })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) { alert(data.message); })
+  .catch(function(e) { alert('Error: ' + e); });
+}
+
+setInterval(refreshData, 3000);
+refreshData();
+</script>
+
+<input type="hidden" id="direction" value="BUY">
+
+</body>
+</html>

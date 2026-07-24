@@ -131,18 +131,8 @@ def get_open_positions(symbol=None):
         return []
     return positions
 
-def _get_point(symbol):
-    info = mt5.symbol_info(symbol)
-    if info is None:
-        return 0.00001
-    return info.point
 
-
-def _get_digits(symbol):
-    info = mt5.symbol_info(symbol)
-    if info is None:
-        return 5
-    return info.digits
+def _send_order(request, label):
     result = mt5.order_send(request)
     if result is None:
         logger.error(f"{label} order_send returned None: {mt5.last_error()}")
@@ -157,3 +147,17 @@ def _get_digits(symbol):
 
     logger.info(f"{label} order executed: ticket={result.order}, deal={result.deal}")
     return result
+
+
+def _get_point(symbol):
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return 0.00001
+    return info.point
+
+
+def _get_digits(symbol):
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return 5
+    return info.digits
