@@ -5,7 +5,7 @@ from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT
 from broker import initialize, login, shutdown as broker_shutdown, is_connected, get_account_details
 from market import get_current_price, get_previous_candle
 from execution import get_open_positions, close_position, set_break_even
-from risk import calculate_lot_from_risk, calculate_stop_loss, calculate_take_profit
+from risk import calculate_lot_from_risk, calculate_sl, calculate_tp
 from logger import setup_logger
 
 logger = setup_logger("ui")
