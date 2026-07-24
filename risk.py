@@ -62,24 +62,18 @@ def calculate_pips_between(entry, sl):
 
 
 def get_pip_value(symbol=None):
-    tick = _tick_info(symbol)
-    if tick is None:
-        return 0.0
     info = _symbol_info(symbol)
     if info is None:
         return 0.0
-    return tick.value / info.point
+    return info.trade_tick_value / info.point
 
 
 def get_loss_per_lot(entry, sl):
-    tick = _tick_info()
-    if tick is None:
-        return 0.0
     info = _symbol_info()
     if info is None:
         return 0.0
     sl_distance_points = abs(entry - sl) / info.point
-    return tick.value * sl_distance_points
+    return info.trade_tick_value * sl_distance_points
 
 
 def calculate_lot_from_risk(entry_price, sl_price, risk_amount, symbol=None):
@@ -95,9 +89,9 @@ def calculate_lot_from_risk(entry_price, sl_price, risk_amount, symbol=None):
     if tick is None:
         return 0.01
 
-    tick_value = tick.value
+    tick_value = info.trade_tick_value
     if tick_value <= 0:
-        logger.warning(f"Tick value is {tick_value}, using fallback for {symbol or 'default'}")
+        logger.warning("trade_tick_value is " + str(tick_value) + ", using fallback for " + str(symbol or 'default'))
         point = info.point
         tick_value = 0.01 * point * 100000
 
@@ -139,7 +133,7 @@ def calculate_lot_percentage(symbol, risk_percent, sl_distance_pips, fixed_lot=N
     if tick is None:
         return 0.01
 
-    tick_value = tick.value
+    tick_value = info.trade_tick_value
     if tick_value <= 0:
         tick_value = 0.01 * point * 100000
 
@@ -181,8 +175,7 @@ def get_risk_summary(entry_price, sl_price, risk_amount, symbol=None):
     sl_distance = abs(entry_price - sl_price)
     sl_distance_pips = sl_distance / info.point
 
-    tick = _tick_info(symbol)
-    tick_value = tick.value if tick else 0.0
+    tick_value = info.trade_tick_value
     loss_per_lot = tick_value * sl_distance_pips
 
     lot_size = calculate_lot_from_risk(entry_price, sl_price, risk_amount, symbol)
@@ -193,7 +186,7 @@ def get_risk_summary(entry_price, sl_price, risk_amount, symbol=None):
         "entry": entry_price,
         "sl": sl_price,
         "sl_distance_pips": round(sl_distance_pips, 1),
-        "tick_value": round(tick_value, 6),
+        "trade_tick_value": round(tick_value, 6),
         "loss_per_lot": round(loss_per_lot, 4),
         "risk_amount": risk_amount,
         "lot_size": lot_size,
