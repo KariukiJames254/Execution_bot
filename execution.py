@@ -4,10 +4,24 @@ from logger import setup_logger
 logger = setup_logger("execution")
 
 
+def execute_sl_tp(order_type, price, sl, tp):
+        if order_type == mt5.ORDER_TYPE_BUY:
+            if sl >= price or tp <= price:
+                logger.error("Invalid stops for BUY: SL must be below entry, TP must be above entry")
+                return None
+        else:
+            if sl <= price or tp >= price:
+                logger.error("Invalid stops for SELL: SL must be above entry, TP must be below entry")
+                return None
+        return True
+
+
 def execute_buy(symbol, lot, sl, tp, comment=""):
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
-        logger.error(f"Failed to get tick for {symbol}")
+        logger.error("Failed to get tick for " + symbol)
+        return None
+    if not execute_sl_tp(mt5.ORDER_TYPE_BUY, tick.ask, sl, tp):
         return None
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -29,7 +43,9 @@ def execute_buy(symbol, lot, sl, tp, comment=""):
 def execute_sell(symbol, lot, sl, tp, comment=""):
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
-        logger.error(f"Failed to get tick for {symbol}")
+        logger.error("Failed to get tick for " + symbol)
+        return None
+    if not execute_sl_tp(mt5.ORDER_TYPE_SELL, tick.bid, sl, tp):
         return None
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -89,13 +105,13 @@ def close_position(position_ticket):
 def set_break_even(position_ticket, symbol):
     position = mt5.positions_get(ticket=position_ticket)
     if position is None or len(position) == 0:
-        logger.error(f"Position {position_ticket} not found for break-even")
+        logger.error("Position " + str(position_ticket) + " not found for break-even")
         return False
 
     pos = position[0]
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
-        logger.error(f"Failed to get tick for {symbol}")
+        logger.error("Failed to get tick for " + symbol)
         return False
 
     point = _get_point(symbol)
@@ -103,8 +119,12 @@ def set_break_even(position_ticket, symbol):
 
     if pos.type == mt5.ORDER_TYPE_BUY:
         new_sl = round(pos.price_open + 1 * point, digits)
+        if not execute_sl_tp(mt5.ORDER_TYPE_BUY, tick.bid, new_sl, pos.tp):
+            return False
     else:
         new_sl = round(pos.price_open - 1 * point, digits)
+        if not execute_sl_tp(mt5.ORDER_TYPE_SELL, tick.ask, new_sl, pos.tp):
+            return False
 
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
