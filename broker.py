@@ -67,3 +67,14 @@ def get_account_details():
 def shutdown():
     mt5.shutdown()
     logger.info("MT5 shutdown complete")
+
+
+def ensure_connected():
+    if is_connected():
+        return True
+    logger.warning("MT5 connection lost, attempting reconnect...")
+    shutdown()
+    if not initialize():
+        return False
+    from config import MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH
+    return login(MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH)

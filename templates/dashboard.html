@@ -8,28 +8,35 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Segoe UI', Arial, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
 h1 { color: #58a6ff; margin-bottom: 20px; }
-h2 { color: #8b949e; margin: 15px 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; margin-bottom: 20px; }
-.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 15px; }
-.card label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
-.card .value { font-size: 22px; font-weight: bold; margin-top: 5px; }
+h2 { color: #8b949e; margin: 20px 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 15px; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+.card label { font-size: 11px; color: #8b949e; text-transform: uppercase; display: block; margin-bottom: 8px; font-weight: 600; letter-spacing: 0.5px; }
+.card .value { font-size: 20px; font-weight: bold; margin-top: 4px; }
 .card .value.green { color: #3fb950; }
 .card .value.red { color: #f85149; }
 .card .value.blue { color: #58a6ff; }
+.card .value.yellow { color: #d29922; }
+.card .value.orange { color: #d29922; }
 .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; margin: 5px; }
 .btn-buy { background: #238636; color: #fff; }
 .btn-sell { background: #da3633; color: #fff; }
 .btn-exec { background: #238636; color: #fff; font-size: 16px; padding: 14px 40px; }
 .btn:hover { opacity: 0.85; }
-.form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-bottom: 10px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 12px; }
 .form-group { display: flex; flex-direction: column; }
-.form-group label { font-size: 11px; color: #8b949e; margin-bottom: 4px; }
-.form-group input, .form-group select { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px; border-radius: 4px; width: 130px; font-size: 13px; }
-.form-group .calc { color: #3fb950; font-weight: bold; font-size: 13px; margin-top: 4px; }
-.radio-group { display: flex; gap: 15px; align-items: center; }
-.radio-group label { font-size: 12px; color: #c9d1d9; cursor: pointer; }
+.form-group label { font-size: 11px; color: #8b949e; margin-bottom: 6px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }
+.form-group input, .form-group select { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 10px 12px; border-radius: 6px; width: 140px; font-size: 14px; transition: border-color 0.2s, box-shadow 0.2s; }
+.form-group input:focus, .form-group select:focus { outline: none; border-color: #58a6ff; box-shadow: 0 0 0 3px rgba(88,166,255,0.15); }
+.form-group input:hover, .form-group select:hover { border-color: #8b949e; }
+.form-group input:disabled { opacity: 0.6; cursor: not-allowed; background: #161b22; }
+.radio-group { display: flex; gap: 12px; align-items: center; }
+.radio-group label { font-size: 12px; color: #c9d1d9; cursor: pointer; padding: 6px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; transition: background 0.2s; }
+.radio-group label:hover { background: #161b22; border-color: #8b949e; }
 .radio-group input { width: auto; margin-right: 4px; }
-.log-box { background: #010409; border: 1px solid #30363d; border-radius: 8px; padding: 12px; height: 300px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 12px; line-height: 1.6; }
+.radio-group input:checked + span { color: #58a6ff; }
+.log-box { background: #010409; border: 1px solid #30363d; border-radius: 8px; padding: 12px; height: 260px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 12px; line-height: 1.6; }
 .log-entry { padding: 2px 0; border-bottom: 1px solid #21262d; }
 .log-info { color: #58a6ff; }
 .log-warn { color: #d29922; }
@@ -38,9 +45,33 @@ h2 { color: #8b949e; margin: 15px 0 10px; font-size: 14px; text-transform: upper
 .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
 .status-connected { background: #3fb950; }
 .status-disconnected { background: #f85149; }
-.risk-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
-.risk-summary .card { text-align: center; }
-.risk-summary .card .value { font-size: 18px; }
+.calc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+.calc-grid .card { text-align: center; }
+.calc-grid .card .value { font-size: 16px; }
+.preview-section { background: #1c2128; border: 2px solid #58a6ff; border-radius: 8px; padding: 15px; margin-top: 15px; }
+.preview-section h3 { color: #58a6ff; margin-bottom: 10px; font-size: 13px; text-transform: uppercase; }
+.hidden { display: none !important; }
+.input-card { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
+.input-card label { font-size: 11px; color: #8b949e; text-transform: uppercase; display: block; margin-bottom: 8px; font-weight: 600; letter-spacing: 0.5px; }
+.input-card input, .input-card select { background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 10px 12px; border-radius: 6px; width: 100%; font-size: 14px; transition: border-color 0.2s, box-shadow 0.2s; }
+.input-card input:focus, .input-card select:focus { outline: none; border-color: #58a6ff; box-shadow: 0 0 0 3px rgba(88,166,255,0.15); }
+.input-card input:hover, .input-card select:hover { border-color: #8b949e; }
+.stage-list { list-style: none; padding: 0; margin: 0; }
+.stage-list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 13px; }
+.stage-list li:last-child { border-bottom: none; }
+.stage-dot { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; flex-shrink: 0; }
+.stage-done { background: #238636; color: #fff; }
+.stage-pending { background: #30363d; color: #8b949e; }
+.stage-active { background: #d29922; color: #0d1117; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.history-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.history-table th, .history-table td { text-align: left; padding: 8px; border-bottom: 1px solid #21262d; font-size: 13px; }
+.history-table th { color: #8b949e; font-weight: 600; text-transform: uppercase; font-size: 11px; }
+.countdown { font-size: 32px; font-weight: bold; color: #58a6ff; text-align: center; margin-top: 8px; }
+.warning-box { background: rgba(210, 153, 34, 0.1); border: 1px solid #d29922; border-radius: 6px; padding: 10px; margin-top: 10px; color: #d29922; font-size: 13px; }
+.exec-result-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+.exec-result-grid .card { text-align: center; }
+.exec-result-grid .card .value { font-size: 16px; }
 </style>
 </head>
 <body>
@@ -50,10 +81,17 @@ h2 { color: #8b949e; margin: 15px 0 10px; font-size: 14px; text-transform: upper
 <div class="grid">
   <div class="card">
     <label>Status</label>
-    <div class="value {{ 'green' if connected else 'red' }}">
+    <div class="value {{ 'green' if connected else 'red' }}" id="conn_status">
       <span class="status-dot {{ 'status-connected' if connected else 'status-disconnected' }}"></span>
       {{ 'Connected' if connected else 'Disconnected' }}
     </div>
+    {% if not connected %}
+    <button class="btn" style="background:#d29922;color:#0d1117;margin-top:10px;padding:8px 14px;font-size:12px;" onclick="reconnectMT5()">Reconnect MT5</button>
+    {% endif %}
+  </div>
+  <div class="card">
+    <label>Broker</label>
+    <div class="value blue">{{ broker or '---' }}</div>
   </div>
   <div class="card">
     <label>Login</label>
@@ -69,12 +107,246 @@ h2 { color: #8b949e; margin: 15px 0 10px; font-size: 14px; text-transform: upper
   </div>
 </div>
 
-<h2>Price</h2>
+<h2>Trade Settings</h2>
+<div class="grid" id="settings_grid">
+  <div class="input-card">
+    <label>Symbol</label>
+    <select id="symbol" onchange="onSymbolChange()" {% if pending_trade %}disabled{% endif %}>
+      {% for s in available_symbols %}
+        <option value="{{ s }}" {% if s == symbol %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="input-card">
+    <label>Risk Amount</label>
+    <input type="number" id="risk_amount" value="{{ default_risk }}" step="10" min="1" oninput="updateSettings()" {% if pending_trade %}disabled{% endif %}>
+  </div>
+  <div class="input-card">
+    <label>Risk Mode</label>
+    <div class="radio-group">
+      <label><input type="radio" name="risk_mode" value="amt" checked onchange="updateSettings()" {% if pending_trade %}disabled{% endif %}> <span>$</span></label>
+      <label><input type="radio" name="risk_mode" value="pct" onchange="updateSettings()" {% if pending_trade %}disabled{% endif %}> <span>%</span></label>
+    </div>
+  </div>
+  <div class="input-card">
+    <label>Reward Ratio</label>
+    <input type="number" id="rr_ratio" value="{{ default_rr }}" step="0.5" min="0.5" oninput="updateSettings()" {% if pending_trade %}disabled{% endif %}>
+  </div>
+  <div class="input-card">
+    <label>Break Even (RR)</label>
+    <input type="number" id="be_rr" value="{{ be_rr }}" step="0.1" min="0.1" oninput="updateSettings()" {% if pending_trade %}disabled{% endif %}>
+  </div>
+</div>
+
+{% if pending_trade %}
+<h2>Selected Candle</h2>
 <div class="grid">
   <div class="card">
-    <label>Symbol</label>
-    <div class="value blue">{{ symbol }}</div>
+    <label>Time</label>
+    <div class="value" id="candle_time">{{ pending_trade.candle_time }}</div>
   </div>
+  <div class="card">
+    <label>Open</label>
+    <div class="value" id="candle_open">{{ '%.5f'|format(pending_trade.candle_open) }}</div>
+  </div>
+  <div class="card">
+    <label>High</label>
+    <div class="value red" id="candle_high">{{ '%.5f'|format(pending_trade.candle_high) }}</div>
+  </div>
+  <div class="card">
+    <label>Low</label>
+    <div class="value green" id="candle_low">{{ '%.5f'|format(pending_trade.candle_low) }}</div>
+  </div>
+  <div class="card">
+    <label>Close</label>
+    <div class="value blue" id="candle_close">{{ '%.5f'|format(pending_trade.candle_close) }}</div>
+  </div>
+</div>
+
+<h2>Trade Preview</h2>
+<div class="card preview-section" style="border-color:#58a6ff;">
+  <div class="calc-grid">
+    <div class="card">
+      <label>Direction</label>
+      <div class="value" id="pending_direction" style="color:{{ '#3fb950' if pending_trade.direction == 'BUY' else '#f85149' }};">{{ pending_trade.direction }}</div>
+    </div>
+    <div class="card">
+      <label>Entry</label>
+      <div class="value blue" id="pending_entry">{{ '%.5f'|format(pending_trade.entry) }}</div>
+    </div>
+    <div class="card">
+      <label>SL</label>
+      <div class="value red" id="pending_sl">{{ '%.5f'|format(pending_trade.sl) }}</div>
+    </div>
+    <div class="card">
+      <label>Distance</label>
+      <div class="value" id="pending_distance">{{ '%.1f'|format(pending_trade.distance_pips) }} pips</div>
+    </div>
+  </div>
+  <div class="calc-grid" style="margin-top:10px;">
+    <div class="card">
+      <label>Risk</label>
+      <div class="value" id="pending_risk">${{ '%.2f'|format(pending_trade.risk_amount) }}</div>
+    </div>
+    <div class="card">
+      <label>Lot Size</label>
+      <div class="value green" id="pending_lot">{{ '%.2f'|format(pending_trade.lot) }}</div>
+    </div>
+    <div class="card">
+      <label>Take Profit</label>
+      <div class="value blue" id="pending_tp">{{ '%.5f'|format(pending_trade.tp) }}</div>
+    </div>
+    <div class="card">
+      <label>Expected Profit</label>
+      <div class="value green" id="pending_profit">${{ '%.2f'|format(pending_trade.risk_amount * pending_trade.rr_ratio) }}</div>
+    </div>
+  </div>
+  <div class="calc-grid" style="margin-top:10px;">
+    <div class="card">
+      <label>Break Even Trigger</label>
+      <div class="value yellow" id="pending_be">{{ '%.5f'|format(pending_trade.be_trigger) }}</div>
+    </div>
+    <div class="card">
+      <label>BE At</label>
+      <div class="value" id="pending_be_rr">{{ '%.1f'|format(pending_trade.be_rr) }}R</div>
+    </div>
+  </div>
+</div>
+
+<h2>Execution Status</h2>
+<div class="grid">
+  <div class="card">
+    <label>Current State</label>
+    <div class="value yellow" id="exec_status">{{ pending_trade.status|title }}</div>
+    {% if pending_trade.status == 'armed' %}
+    <div class="countdown" id="countdown">{{ pending_trade.countdown }}</div>
+    <label style="margin-top:8px;">Closes In</label>
+    {% endif %}
+  </div>
+  <div class="card">
+    <label>Break Even</label>
+    <div class="value" id="be_trigger">{{ '%.5f'|format(pending_trade.be_trigger) }}</div>
+    <label style="margin-top:4px;font-size:11px;color:#8b949e;">At {{ '%.1f'|format(pending_trade.be_rr) }}R</label>
+  </div>
+</div>
+
+<h2>Workflow</h2>
+<div class="card">
+  <ul class="stage-list" id="stage_list">
+    {% for stage in pending_trade.stages %}
+    <li>
+      <span class="stage-dot {{ 'stage-done' if stage.done else 'stage-pending' }}">
+        {% if stage.done %}✓{% else %}○{% endif %}
+      </span>
+      <span>{{ stage.name }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+
+{% if pending_trade.status == 'executed' %}
+<h2>Execution Result</h2>
+<div class="card preview-section" style="border-color:#3fb950;">
+  <div class="calc-grid">
+    <div class="card">
+      <label>Status</label>
+      <div class="value green">Executed</div>
+    </div>
+    <div class="card">
+      <label>Ticket</label>
+      <div class="value blue" id="exec_ticket">{{ pending_trade.ticket }}</div>
+    </div>
+    <div class="card">
+      <label>Lot Size</label>
+      <div class="value green" id="exec_lot">{{ '%.2f'|format(pending_trade.lot) }}</div>
+    </div>
+    <div class="card">
+      <label>Planned Entry</label>
+      <div class="value" id="exec_planned">{{ '%.5f'|format(pending_trade.entry) }}</div>
+    </div>
+  </div>
+  <div class="calc-grid" style="margin-top:10px;">
+    <div class="card">
+      <label>Executed Entry</label>
+      <div class="value green" id="exec_entry">{{ '%.5f'|format(pending_trade.entry) }}</div>
+    </div>
+    <div class="card">
+      <label>Slippage</label>
+      <div class="value yellow" id="exec_slippage">{{ '%.1f'|format(pending_trade.slippage * 10000) }} pips</div>
+    </div>
+    <div class="card">
+      <label>Expected Profit</label>
+      <div class="value green" id="exec_profit">${{ '%.2f'|format(pending_trade.risk_amount * pending_trade.rr_ratio) }}</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="form-row" style="margin-top:15px;" id="arm_buttons">
+  <button class="btn btn-exec" style="background:#238636;" onclick="armTrade('BUY')">🛡 ARM BUY</button>
+  <button class="btn btn-exec" style="background:#da3633;" onclick="armTrade('SELL')">🛡 ARM SELL</button>
+</div>
+
+{% if pending_trade and pending_trade.status == 'armed' %}
+<div class="form-row" style="margin-top:15px;" id="armed_actions">
+  <div class="card" style="flex:1;text-align:center;">
+    <label>Armed Direction</label>
+    <div class="value {{ 'green' if pending_trade.direction == 'BUY' else 'red' }}">{{ pending_trade.direction }}</div>
+    <label style="margin-top:8px;font-size:11px;color:#8b949e;">Waiting for candle close...</label>
+  </div>
+  <button class="btn" style="background:#da3633;color:#fff;" onclick="cancelTrade()">✕ Cancel Pending Trade</button>
+</div>
+{% endif %}
+
+{% if pending_trade and pending_trade.status == 'cancelled' %}
+<div class="card" style="border-color:#da3633;margin-top:15px;">
+  <div class="value red" style="text-align:center;">Trade Cancelled</div>
+</div>
+{% endif %}
+
+{% if pending_trade and pending_trade.status == 'error' %}
+<div class="card" style="border-color:#da3633;margin-top:15px;">
+  <div class="value red" style="text-align:center;">Execution Failed: {{ pending_trade.error }}</div>
+</div>
+{% endif %}
+{% endif %}
+
+<h2>EA Input</h2>
+<div class="card">
+  <p style="color:#8b949e;font-size:13px;margin-bottom:10px;">Highlight a candle in MT5, then arm the trade below. The EA will wait for candle close and execute automatically.</p>
+  <div class="form-row" id="ea_buttons">
+    <button class="btn btn-exec" style="background:#238636;" onclick="armTrade('BUY')">🛡 ARM BUY</button>
+    <button class="btn btn-exec" style="background:#da3633;" onclick="armTrade('SELL')">🛡 ARM SELL</button>
+  </div>
+</div>
+
+<h2>Trade History</h2>
+<div class="card" id="history_card">
+  <table class="history-table">
+    <thead>
+      <tr><th>Time</th><th>Symbol</th><th>Direction</th><th>Lot</th><th>Entry</th><th>Slippage</th><th>Result</th></tr>
+    </thead>
+    <tbody id="history_body">
+      {% for trade in trade_history %}
+      <tr>
+        <td>{{ trade.time }}</td>
+        <td>{{ trade.symbol }}</td>
+        <td style="color:{{ '#3fb950' if trade.direction == 'BUY' else '#f85149' }};">{{ trade.direction }}</td>
+        <td>{{ '%.2f'|format(trade.lot) }}</td>
+        <td>{{ '%.5f'|format(trade.entry) }}</td>
+        <td>{{ '%.1f'|format(trade.slippage * 10000) }} pips</td>
+        <td style="color:#3fb950;">{{ trade.status }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if not trade_history %}
+  <div style="color: #8b949e; padding: 10px 0;">No trade history yet</div>
+  {% endif %}
+</div>
+
+<h2>Live Market Price</h2>
+<div class="grid">
   <div class="card">
     <label>Bid</label>
     <div class="value" id="bid">${{ '{:.5f}'.format(bid) if bid else '---' }}</div>
@@ -86,58 +358,6 @@ h2 { color: #8b949e; margin: 15px 0 10px; font-size: 14px; text-transform: upper
   <div class="card">
     <label>Spread</label>
     <div class="value" id="spread">---</div>
-  </div>
-</div>
-
-<h2>Risk Management</h2>
-<div class="card">
-  <div class="form-row">
-    <div class="form-group">
-      <label>Risk Mode</label>
-      <div class="radio-group">
-        <label><input type="radio" id="risk_pct" name="risk_mode" value="pct" onchange="toggleRiskMode()"> &percnt;</label>
-        <label><input type="radio" id="risk_amt" name="risk_mode" value="amt" checked onchange="toggleRiskMode()"> $</label>
-      </div>
-    </div>
-    <div class="form-group">
-      <label>Risk Amount</label>
-      <input type="number" id="risk_amount" value="{{ default_risk }}" step="10" min="1" oninput="recalculate()">
-    </div>
-    <div class="form-group">
-      <label>Entry Price</label>
-      <input type="number" id="entry_price" step="0.00001" value="" oninput="recalculate()">
-    </div>
-    <div class="form-group">
-      <label>Stop Loss</label>
-      <input type="number" id="sl_price" step="0.00001" value="" oninput="recalculate()">
-    </div>
-    <div class="form-group">
-      <label>Risk / Reward</label>
-      <input type="number" id="rr_ratio" value="2" step="0.5" min="0.5" oninput="recalculate()">
-    </div>
-  </div>
-  <div class="risk-summary">
-    <div class="card">
-      <label>Distance</label>
-      <div class="value" id="calc_distance">0 pips</div>
-    </div>
-    <div class="card">
-      <label>Lot Size</label>
-      <div class="value green" id="calc_lot">0.00</div>
-    </div>
-    <div class="card">
-      <label>Take Profit</label>
-      <div class="value blue" id="calc_tp">---</div>
-    </div>
-    <div class="card">
-      <label>Risk $</label>
-      <div class="value" id="calc_risk">$0</div>
-    </div>
-  </div>
-  <div class="form-row" style="margin-top:10px;">
-    <button class="btn btn-exec" style="background:#238636;" onclick="executeTrade('BUY')">&#x25B2; BUY</button>
-    <button class="btn btn-exec" style="background:#da3633;" onclick="executeTrade('SELL')">&#x25BC; SELL</button>
-    <span id="calc_feedback" style="font-size:12px;color:#8b949e;"></span>
   </div>
 </div>
 
@@ -156,106 +376,228 @@ h2 { color: #8b949e; margin: 15px 0 10px; font-size: 14px; text-transform: upper
 <script>
 var cachedBid = null;
 var cachedAsk = null;
+var pendingDirection = null;
+var countdownInterval = null;
+var lastLogCount = 0;
 
-function toggleRiskMode() {
-  recalculate();
+function getSelectedSymbol() {
+  return document.getElementById('symbol').value;
 }
 
-function recalculate() {
-  var sl = parseFloat(document.getElementById('sl_price').value);
-  var riskAmt = parseFloat(document.getElementById('risk_amount').value);
-  var rr = parseFloat(document.getElementById('rr_ratio').value);
-  var isPct = document.getElementById('risk_pct').checked;
-  var direction = document.getElementById('direction').value;
+function onSymbolChange() {
+  updateSettings();
+}
 
-  if (!sl || !riskAmt) {
-    document.getElementById('calc_distance').textContent = '0 pips';
-    document.getElementById('calc_lot').textContent = '0.00';
-    document.getElementById('calc_tp').textContent = '---';
-    document.getElementById('calc_risk').textContent = '$0';
+function updateSettings() {
+  var risk = parseFloat(document.getElementById('risk_amount').value) || 100;
+  var rr = parseFloat(document.getElementById('rr_ratio').value) || 2;
+  var beRr = parseFloat(document.getElementById('be_rr').value) || 1;
+  var riskMode = document.querySelector('input[name="risk_mode"]:checked') ? document.querySelector('input[name="risk_mode"]:checked').value : 'amt';
+  
+  fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      risk_amount: risk,
+      rr_ratio: rr,
+      be_rr: beRr,
+      risk_mode: riskMode,
+    })
+  });
+}
+
+function armTrade(direction) {
+  var symbol = getSelectedSymbol();
+  var riskAmt = parseFloat(document.getElementById('risk_amount').value) || 100;
+  var rr = parseFloat(document.getElementById('rr_ratio').value) || 2;
+  var beRr = parseFloat(document.getElementById('be_rr').value) || 1;
+  var riskMode = document.querySelector('input[name="risk_mode"]:checked') ? document.querySelector('input[name="risk_mode"]:checked').value : 'amt';
+
+  if (!isConnected()) {
+    updateStatus('MT5 is not connected. Please reconnect.');
     return;
   }
 
-  fetch('/api/price')
+  setButtonsDisabled(true);
+
+  fetch('/api/candle_data', {
+    headers: { 'X-Symbol': symbol }
+  })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      if (!data.bid || !data.ask) return;
-
-      var entry;
-      if (direction === 'BUY') {
-        entry = data.ask;
-      } else {
-        entry = data.bid;
-      }
-
-      document.getElementById('entry_price').value = entry.toFixed(5);
-
-      if (direction === 'BUY' && sl >= entry) {
-        document.getElementById('calc_distance').textContent = '---';
-        document.getElementById('calc_lot').textContent = '0.00';
-        document.getElementById('calc_tp').textContent = '---';
-        document.getElementById('calc_risk').textContent = '$0';
-        return;
-      }
-      if (direction === 'SELL' && sl <= entry) {
-        document.getElementById('calc_distance').textContent = '---';
-        document.getElementById('calc_lot').textContent = '0.00';
-        document.getElementById('calc_tp').textContent = '---';
-        document.getElementById('calc_risk').textContent = '$0';
+      if (data.error) {
+        updateStatus('Error: ' + data.error);
+        setButtonsDisabled(false);
         return;
       }
 
-      var diff = Math.abs(entry - sl);
-      var distPips = diff / 0.0001;
-      var tpCalc;
-      if (direction === 'BUY') {
-        tpCalc = entry + diff * rr;
-      } else {
-        tpCalc = entry - diff * rr;
-      }
-
-      document.getElementById('calc_distance').textContent = distPips.toFixed(1) + ' pips';
-      document.getElementById('calc_tp').textContent = tpCalc.toFixed(5);
-      document.getElementById('calc_risk').textContent = '$' + riskAmt.toFixed(2);
-
-      fetch('/api/calc_lot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entry: entry, sl: sl, risk_amount: riskAmt, risk_mode: isPct ? 'pct' : 'amt' })
+      fetch('/api/price', {
+        headers: { 'X-Symbol': symbol }
       })
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (data.lot) {
-          document.getElementById('calc_lot').textContent = data.lot.toFixed(2);
-          document.getElementById('calc_risk').textContent = isPct ? '$' + (riskAmt * data.balance / 100).toFixed(2) : '$' + riskAmt.toFixed(2);
-        }
-      });
+        .then(function(r) { return r.json(); })
+        .then(function(priceData) {
+          if (!priceData.bid || !priceData.ask) {
+            updateStatus('Could not fetch market price.');
+            setButtonsDisabled(false);
+            return;
+          }
+
+          var entry = direction === 'BUY' ? priceData.ask : priceData.bid;
+
+          fetch('/api/prepare_trade', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Symbol': symbol
+            },
+            body: JSON.stringify({
+              symbol: symbol,
+              direction: direction,
+              timeframe: 'M15',
+              open: data.open,
+              high: data.high,
+              low: data.low,
+              close: data.close,
+              time: data.time,
+              risk_amount: riskAmt,
+              risk_mode: riskMode,
+              rr_ratio: rr,
+              be_rr: beRr,
+            })
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(prepData) {
+            if (prepData.error) {
+              updateStatus('Error: ' + prepData.error);
+              setButtonsDisabled(false);
+              return;
+            }
+            pendingDirection = direction;
+            updateStatus(direction + ' trade armed. Waiting for candle close...');
+            window.location.href = '?trade_id=' + prepData.trade_id;
+          });
+        });
     });
 }
 
-function refreshData() {
-  fetch('/api/status')
+function cancelTrade() {
+  var urlParams = new URLSearchParams(window.location.search);
+  var tradeId = urlParams.get('trade_id');
+  
+  if (!tradeId) {
+    updateStatus('No active trade to cancel.');
+    return;
+  }
+
+  if (!confirm('Are you sure you want to cancel this pending trade?')) {
+    return;
+  }
+
+  fetch('/api/cancel_trade', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trade_id: tradeId })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.status === 'cancelled') {
+      updateStatus('Trade cancelled by user.');
+      pendingDirection = null;
+      setTimeout(function() { window.location.href = '/'; }, 1500);
+    } else {
+      updateStatus(data.error || 'Failed to cancel trade.');
+    }
+  });
+}
+
+function setButtonsDisabled(disabled) {
+  var btns = document.querySelectorAll('#arm_buttons button, #ea_buttons button, #armed_actions button');
+  btns.forEach(function(btn) {
+    if (btn) btn.disabled = disabled;
+  });
+  var inputs = document.querySelectorAll('#settings_grid input, #settings_grid select');
+  inputs.forEach(function(input) {
+    if (input) input.disabled = disabled;
+  });
+}
+
+function updateStatus(message) {
+  var el = document.getElementById('exec_status');
+  if (el) el.textContent = message;
+}
+
+function isConnected() {
+  return document.getElementById('conn_status') && document.getElementById('conn_status').innerHTML.indexOf('Connected') !== -1;
+}
+
+function reconnectMT5() {
+  fetch('/api/reconnect', { method: 'POST' })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      document.getElementById('status').innerHTML =
-        '<span class="status-dot ' + (data.connected ? 'status-connected' : 'status-disconnected') + '"></span>' +
-        (data.connected ? 'Connected' : 'Disconnected');
+      if (data.connected) {
+        alert('MT5 reconnected successfully');
+        location.reload();
+      } else {
+        alert('Reconnect failed. Check MT5 terminal.');
+      }
+    })
+    .catch(function(e) { alert('Reconnect error: ' + e); });
+}
+
+function refreshData() {
+  var symbol = getSelectedSymbol();
+  var urlParams = new URLSearchParams(window.location.search);
+  var tradeId = urlParams.get('trade_id');
+
+  fetch('/api/status', {
+    headers: { 'X-Symbol': symbol }
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var statusEl = document.getElementById('conn_status');
+      if (statusEl) {
+        statusEl.innerHTML = '<span class="status-dot ' + (data.connected ? 'status-connected' : 'status-disconnected') + '"></span>' + (data.connected ? 'Connected' : 'Disconnected');
+        statusEl.className = 'value ' + (data.connected ? 'green' : 'red');
+      }
       document.getElementById('balance').textContent = data.balance ? '$' + data.balance.toFixed(2) : '---';
       document.getElementById('equity').textContent = data.equity ? '$' + data.equity.toFixed(2) : '---';
       if (data.bid) {
+        cachedBid = data.bid;
+        cachedAsk = data.ask;
         document.getElementById('bid').textContent = data.bid.toFixed(5);
         document.getElementById('ask').textContent = data.ask.toFixed(5);
         document.getElementById('spread').textContent = ((data.ask - data.bid) * 10000).toFixed(1) + ' pips';
-        if (!document.getElementById('entry_price').value) {
-          document.getElementById('entry_price').value = data.ask.toFixed(5);
+      }
+
+      if (data.pending_trade) {
+        var pending = data.pending_trade;
+        
+        if (pending.status === 'executed' || pending.status === 'error' || pending.status === 'cancelled') {
+          setButtonsDisabled(true);
+          if (countdownInterval) clearInterval(countdownInterval);
         }
-        cachedBid = data.bid;
-        cachedAsk = data.ask;
-        recalculate();
+        
+        if (pending.status === 'armed' && data.countdown_str) {
+          var countdownEl = document.getElementById('countdown');
+          if (countdownEl) countdownEl.textContent = data.countdown_str;
+        }
+
+        if (pending.stages) {
+          var stageList = document.getElementById('stage_list');
+          if (stageList) {
+            stageList.innerHTML = pending.stages.map(function(stage) {
+              var dotClass = stage.done ? 'stage-done' : 'stage-pending';
+              var symbol = stage.done ? '✓' : '○';
+              return '<li><span class="stage-dot ' + dotClass + '">' + symbol + '</span><span>' + stage.name + '</span></li>';
+            }).join('');
+          }
+        }
       }
     });
 
-  fetch('/api/positions')
+  fetch('/api/positions', {
+    headers: { 'X-Symbol': symbol }
+  })
     .then(function(r) { return r.json(); })
     .then(function(data) {
       var el = document.getElementById('positions');
@@ -271,82 +613,48 @@ function refreshData() {
           '</div>';
       }).join('');
     });
-}
 
-function executeTrade(dir) {
-  var sl = parseFloat(document.getElementById('sl_price').value);
-  var riskAmt = parseFloat(document.getElementById('risk_amount').value);
-  var isPct = document.getElementById('risk_pct').checked;
-  var rr = parseFloat(document.getElementById('rr_ratio').value);
-
-  if (!sl || !riskAmt) {
-    alert('Please fill in Stop Loss and Risk Amount first.');
-    return;
-  }
-
-  fetch('/api/price')
+  fetch('/api/logs')
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      if (!data.bid || !data.ask) {
-        alert('Could not fetch market price.');
+      var el = document.getElementById('log-box');
+      if (data.length === 0) { el.innerHTML = ''; return; }
+      var newHtml = data.map(function(e) {
+        return '<div class=\"log-entry ' + e.level + '\">' + e.time + ' ' + e.message + '</div>';
+      }).join('');
+      if (el.innerHTML !== newHtml) {
+        el.innerHTML = newHtml;
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+
+  fetch('/api/history')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var tbody = document.getElementById('history_body');
+      if (!tbody) return;
+      if (!data.length) {
+        tbody.innerHTML = '';
         return;
       }
-
-      var entry;
-      if (dir === 'BUY') {
-        entry = data.ask;
-      } else {
-        entry = data.bid;
-      }
-
-      if (dir === 'BUY' && sl >= entry) {
-        alert('For BUY, Stop Loss must be below Entry price (' + entry.toFixed(5) + ').');
-        return;
-      }
-      if (dir === 'SELL' && sl <= entry) {
-        alert('For SELL, Stop Loss must be above Entry price (' + entry.toFixed(5) + ').');
-        return;
-      }
-
-      var dist = Math.abs(entry - sl);
-      var tp;
-      if (dir === 'BUY') {
-        tp = entry + dist * rr;
-      } else {
-        tp = entry - dist * rr;
-      }
-
-      fetch('/api/calc_lot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entry: entry, sl: sl, risk_amount: riskAmt, risk_mode: isPct ? 'pct' : 'amt' })
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (data.lot && data.lot > 0) {
-          var lot = data.lot;
-          fetch('/api/trade', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ direction: dir, lot: lot, entry: entry, sl_price: sl, tp_price: tp })
-          })
-          .then(function(r) { return r.json(); })
-          .then(function(data2) { alert(data2.message); })
-          .catch(function(e) { alert('Error: ' + e); });
-        } else {
-          alert('Cannot calculate lot size. Check Stop Loss distance.');
-        }
-      })
-      .catch(function(e) { alert('Error: ' + e); });
-    })
-    .catch(function(e) { alert('Error fetching price: ' + e); });
+      tbody.innerHTML = data.map(function(trade) {
+        return '<tr>' +
+          '<td>' + trade.time + '</td>' +
+          '<td>' + trade.symbol + '</td>' +
+          '<td style="color:' + (trade.direction === 'BUY' ? '#3fb950' : '#f85149') + ';">' + trade.direction + '</td>' +
+          '<td>' + trade.lot.toFixed(2) + '</td>' +
+          '<td>' + trade.entry.toFixed(5) + '</td>' +
+          '<td>' + (trade.slippage * 10000).toFixed(1) + ' pips</td>' +
+          '<td style="color:#3fb950;">' + trade.status + '</td>' +
+          '</tr>';
+      }).join('');
+    });
 }
 
-setInterval(refreshData, 3000);
+if (countdownInterval) clearInterval(countdownInterval);
+countdownInterval = setInterval(refreshData, 1000);
 refreshData();
 </script>
-
-<input type="hidden" id="direction" value="BUY">
 
 </body>
 </html>

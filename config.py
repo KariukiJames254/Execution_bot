@@ -22,7 +22,7 @@ RR_RATIO = float(os.environ.get("RR_RATIO", "2"))
 DEFAULT_RISK_AMOUNT = float(os.environ.get("DEFAULT_RISK_AMOUNT", "100"))
 
 BE_ENABLED = os.environ.get("BE_ENABLED", "True").lower() == "true"
-BE_PIPS = int(os.environ.get("BE_PIPS", "5"))
+BE_RR = float(os.environ.get("BE_RR", "1.0"))
 
 FIXED_LOT = os.environ.get("FIXED_LOT", "")
 if FIXED_LOT:

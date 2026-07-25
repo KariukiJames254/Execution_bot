@@ -15,7 +15,7 @@ from config import (
 from broker import initialize, login, shutdown, is_connected, get_account_details
 from market import get_previous_candle, get_current_price, is_market_open
 from timer import wait_for_candle_close
-from risk import calculate_lot_size, calculate_stop_loss, calculate_take_profit
+from risk import calculate_lot_percentage, calculate_sl, calculate_tp
 from execution import execute_buy, execute_sell, get_open_positions, close_position
 from telegram_bot import send_trade_notification
 from logger import setup_logger
@@ -90,9 +90,9 @@ def execute_trade(direction):
 
     entry_price = candle["close"]
 
-    lot = calculate_lot_size(SYMBOL, RISK_PER_TRADE, SL_PIPS, FIXED_LOT)
-    sl = calculate_stop_loss(entry_price, SL_PIPS, direction)
-    tp = calculate_take_profit(entry_price, SL_PIPS, direction)
+    lot = calculate_lot_percentage(SYMBOL, RISK_PER_TRADE, SL_PIPS, FIXED_LOT)
+    sl = calculate_sl(entry_price, SL_PIPS, direction)
+    tp = calculate_tp(entry_price, SL_PIPS, direction)
 
     if direction == "BUY":
         logger.info(f"BUY: price={entry_price}, lot={lot}, SL={sl}, TP={tp}")
