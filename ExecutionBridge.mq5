@@ -5,7 +5,7 @@
 #property version   "2.01"
 #property strict
 
-input string FlaskURL   = "http://localhost:5000";
+input string FlaskURL   = "http://127.0.0.1:5000";
 input bool   TEST_MODE  = false;
 
 enum TradeState { STATE_IDLE, STATE_ARMED, STATE_EXECUTED, STATE_CANCELLED, STATE_ERROR };
@@ -234,6 +234,8 @@ void ExecuteTrade()
 
 bool SendPostRequest(string url, string jsonPayload, string &response)
 {
+    Print("Calling URL: ", url);
+    
     uchar postData[];
     StringToCharArray(jsonPayload, postData);
 
@@ -270,15 +272,21 @@ bool SendPostRequest(string url, string jsonPayload, string &response)
        return true;
     }
 
-    Print("WebRequest POST failed. Code: ", res, " Response: ", response);
-    if(res == -1)
-       Print("Check MT5 Options -> Expert Advisors -> Allow WebRequest");
+    int err = GetLastError();
+    Print("==============================");
+    Print("URL        : ", url);
+    Print("HTTP Result: ", res);
+    Print("MT5 Error  : ", err);
+    Print("Response   : ", response);
+    Print("==============================");
 
     return false;
 }
 
 bool SendGetRequest(string url, string &response)
 {
+    Print("Calling URL: ", url);
+    
     uchar empty_data[];
     uchar result[];
     string headers = "";
@@ -313,9 +321,13 @@ bool SendGetRequest(string url, string &response)
        return true;
     }
 
-    Print("WebRequest GET failed. Code: ", res, " Response: ", response);
-    if(res == -1)
-       Print("Check MT5 Options -> Expert Advisors -> Allow WebRequest");
+    int err = GetLastError();
+    Print("==============================");
+    Print("URL        : ", url);
+    Print("HTTP Result: ", res);
+    Print("MT5 Error  : ", err);
+    Print("Response   : ", response);
+    Print("==============================");
 
     return false;
 }
