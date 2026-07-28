@@ -5,7 +5,7 @@
 #property version   "2.01"
 #property strict
 
-input string FlaskURL   = "http://127.0.0.1:5000";
+input string FlaskURL   = "http://localhost:5000";
 input bool   TEST_MODE  = false;
 
 enum TradeState { STATE_IDLE, STATE_ARMED, STATE_EXECUTED, STATE_CANCELLED, STATE_ERROR };
