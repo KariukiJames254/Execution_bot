@@ -5,7 +5,7 @@
 #property version   "2.01"
 #property strict
 
-input string FlaskURL   = "http://127.0.0.1:5000";
+input string FlaskURL   = "http://127.0.0.1:5000";  // CHANGE THIS to your VPS IP or domain when deploying
 input bool   TEST_MODE  = false;
 
 enum TradeState { STATE_IDLE, STATE_ARMED, STATE_EXECUTED, STATE_CANCELLED, STATE_ERROR };
@@ -16,6 +16,7 @@ string pendingDirection = "";
 datetime candleCloseTime = 0;
 string trackedTradeId = "";
 datetime armedTime = 0;
+datetime armedBarTime = 0;
 
 bool SendPostRequest(string url, string jsonPayload, string &response);
 bool SendGetRequest(string url, string &response);
@@ -24,211 +25,226 @@ string Trim(string value);
 
 int OnInit()
 {
-    Print("Execution Bridge Started - NEW TIMING v2");
-    EventSetTimer(1);
-    return(INIT_SUCCEEDED);
+   Print("Execution Bridge Started - NEW TIMING v2");
+   EventSetTimer(1);
+   return(INIT_SUCCEEDED);
 }
 
 void OnDeinit(const int reason)
 {
-    EventKillTimer();
-    Print("Execution Bridge Stopped");
+   EventKillTimer();
+   Print("Execution Bridge Stopped");
 }
 
 void OnTimer()
 {
-    if(currentState != STATE_IDLE && currentState != STATE_ARMED)
-        return;
+   if(currentState != STATE_IDLE && currentState != STATE_ARMED)
+      return;
 
-    string url = FlaskURL + "/api/ea/pending?symbol=" + _Symbol + "&trade_id=" + UrlEncode(trackedTradeId);
-    string response;
-    bool ok = SendGetRequest(url, response);
+   string url = FlaskURL + "/api/ea/pending?symbol=" + _Symbol + "&trade_id=" + UrlEncode(trackedTradeId);
+   string response;
+   bool ok = SendGetRequest(url, response);
 
-    if(!ok)
-    {
-        Print("Flask not reachable");
-        return;
+   if(!ok)
+   {
+      Print("ERROR: Failed to send execution request.");
+      currentState = STATE_ERROR;
+      Comment("FAILED\nConnection error");
+      Sleep(5000);
+      currentState = STATE_IDLE;
+      pendingTradeId = "";
+      pendingDirection = "";
+      trackedTradeId = "";
+       candleCloseTime = 0;
+       armedTime = 0;
+       armedBarTime = 0;
+       Comment("");
+       return;
     }
 
     string tradeId = Trim(ExtractJsonValue(response, "trade_id"));
-    string status = Trim(ExtractJsonValue(response, "status"));
+   string status = Trim(ExtractJsonValue(response, "status"));
 
-    if(tradeId == "" || status == "")
-        return;
+   if(tradeId == "" || status == "")
+      return;
 
-    if(trackedTradeId != tradeId && status == "armed")
-    {
-        string direction = Trim(ExtractJsonValue(response, "direction"));
-        string candleTimeStr = Trim(ExtractJsonValue(response, "candle_time"));
-        string timeframe = Trim(ExtractJsonValue(response, "timeframe"));
+   if(trackedTradeId != tradeId && status == "armed")
+   {
+      string direction = Trim(ExtractJsonValue(response, "direction"));
+      string candleTimeStr = Trim(ExtractJsonValue(response, "candle_time"));
+      string timeframe = Trim(ExtractJsonValue(response, "timeframe"));
 
-        trackedTradeId = tradeId;
-        pendingTradeId = tradeId;
-        pendingDirection = direction;
+      trackedTradeId = tradeId;
+      pendingTradeId = tradeId;
+      pendingDirection = direction;
 
-        int tf_minutes = 15;
-        if(timeframe == "M1") tf_minutes = 1;
-        else if(timeframe == "M5") tf_minutes = 5;
-        else if(timeframe == "M15") tf_minutes = 15;
-        else if(timeframe == "M30") tf_minutes = 30;
-        else if(timeframe == "H1") tf_minutes = 60;
-        else if(timeframe == "H4") tf_minutes = 240;
-        else if(timeframe == "D1") tf_minutes = 1440;
+      int tf_minutes = 15;
+      if(timeframe == "M1") tf_minutes = 1;
+      else if(timeframe == "M5") tf_minutes = 5;
+      else if(timeframe == "M15") tf_minutes = 15;
+      else if(timeframe == "M30") tf_minutes = 30;
+      else if(timeframe == "H1") tf_minutes = 60;
+      else if(timeframe == "H4") tf_minutes = 240;
+      else if(timeframe == "D1") tf_minutes = 1440;
 
-        datetime now = TimeCurrent();
-        MqlDateTime dt;
-        TimeToStruct(now, dt);
-        dt.sec = 0;
+      datetime now = TimeCurrent();
+      MqlDateTime dt;
+      TimeToStruct(now, dt);
+      dt.sec = 0;
 
-        int safety = 0;
-        do
-        {
-            if(tf_minutes < 60)
-            {
-                int remainder = dt.min % tf_minutes;
-                if(remainder == 0)
-                    dt.min += tf_minutes;
-                else
-                    dt.min = ((dt.min / tf_minutes) + 1) * tf_minutes;
-            }
-            else if(tf_minutes >= 1440)
-            {
-                dt.hour = 0;
-                dt.min = 0;
-                dt.day++;
-            }
+      int safety = 0;
+      do
+      {
+         if(tf_minutes < 60)
+         {
+            int remainder = dt.min % tf_minutes;
+            if(remainder == 0)
+               dt.min += tf_minutes;
             else
-            {
-                int tf_hours = tf_minutes / 60;
-                int remainder = dt.hour % tf_hours;
-                if(remainder == 0 && dt.min == 0)
-                    dt.hour += tf_hours;
-                else
-                    dt.hour = ((dt.hour / tf_hours) + 1) * tf_hours;
-                dt.min = 0;
-            }
+               dt.min = ((dt.min / tf_minutes) + 1) * tf_minutes;
+         }
+         else if(tf_minutes >= 1440)
+         {
+            dt.hour = 0;
+            dt.min = 0;
+            dt.day++;
+         }
+         else
+         {
+            int tf_hours = tf_minutes / 60;
+            int remainder = dt.hour % tf_hours;
+            if(remainder == 0 && dt.min == 0)
+               dt.hour += tf_hours;
+            else
+               dt.hour = ((dt.hour / tf_hours) + 1) * tf_hours;
+            dt.min = 0;
+         }
 
-            if(dt.min >= 60) { dt.min -= 60; dt.hour++; }
-            if(dt.hour >= 24) { dt.hour -= 24; dt.day++; }
-            candleCloseTime = StructToTime(dt);
-            safety++;
-        }
-        while(candleCloseTime <= now && safety < 50);
+         if(dt.min >= 60) { dt.min -= 60; dt.hour++; }
+         if(dt.hour >= 24) { dt.hour -= 24; dt.day++; }
+         candleCloseTime = StructToTime(dt);
+         safety++;
+      }
+       while(candleCloseTime < now && safety < 50);
 
-        PrintFormat("ARMED tf=%s now=%d close=%d wait=%d sec candle=%s tradeId=%s", timeframe, now, candleCloseTime, (int)(candleCloseTime - now), candleTimeStr, tradeId);
+      PrintFormat("ARMED tf=%s now=%d close=%d wait=%d sec candle=%s tradeId=%s", timeframe, now, candleCloseTime, (int)(candleCloseTime - now), candleTimeStr, tradeId);
 
-        currentState = STATE_ARMED;
-        armedTime = TimeCurrent();
+       currentState = STATE_ARMED;
+       armedTime = TimeCurrent();
+       armedBarTime = iTime(_Symbol, _Period, 0);
 
-        Print("======================================");
-        Print("TRADE ARMED");
-        Print("Direction: ", direction);
-        Print("Trade ID: ", tradeId);
-        Print("Candle: ", candleTimeStr);
-        Print("Waiting for candle close...");
-        Print("======================================");
-    }
+      Print("======================================");
+      Print("TRADE ARMED");
+      Print("Direction: ", direction);
+      Print("Trade ID: ", tradeId);
+      Print("Candle: ", candleTimeStr);
+      Print("Waiting for candle close...");
+      Print("======================================");
+   }
 
     if(currentState == STATE_ARMED && candleCloseTime > 0)
     {
-        datetime now = TimeCurrent();
+       datetime now = TimeCurrent();
+       datetime currentBarTime = iTime(_Symbol, _Period, 0);
 
-        if(now >= candleCloseTime && armedTime > 0 && now - armedTime >= 5)
+        if(currentBarTime != armedBarTime)
         {
-            Print("Candle closed! Executing trade...");
-            currentState = STATE_EXECUTED;
-            ExecuteTrade();
+           Print("New candle detected! Executing trade...");
+           currentState = STATE_EXECUTED;
+           ExecuteTrade();
         }
         else if(now >= candleCloseTime)
         {
-            int remaining = (int)(candleCloseTime - now);
-            Comment("ARMED ", pendingDirection, "\n",
-                    "Candle: ", ExtractJsonValue(response, "candle_time"), "\n",
-                    "Safety hold: ", 5 - (int)(now - armedTime), " sec remaining");
+           Comment("ARMED ", pendingDirection, "\n",
+                   "Candle: ", ExtractJsonValue(response, "candle_time"), "\n",
+                   "Waiting for new candle...");
         }
-        else
-        {
-            int remaining = (int)(candleCloseTime - now);
-            Comment("ARMED ", pendingDirection, "\n",
-                    "Candle: ", ExtractJsonValue(response, "candle_time"), "\n",
-                    "Closes in: ", remaining, " seconds");
-        }
+       else
+       {
+          int remaining = (int)(candleCloseTime - now);
+          Comment("ARMED ", pendingDirection, "\n",
+                  "Candle: ", ExtractJsonValue(response, "candle_time"), "\n",
+                  "Closes in: ", remaining, " seconds");
+       }
     }
 }
 
 void ExecuteTrade()
 {
-    if(pendingTradeId == "") return;
+   if(pendingTradeId == "") return;
 
-    pendingTradeId = Trim(pendingTradeId);
+   pendingTradeId = Trim(pendingTradeId);
 
-    string url;
-    if(TEST_MODE)
-    {
-        string encodedId = UrlEncode(pendingTradeId);
-        url = FlaskURL + "/api/execute_trade?trade_id=" + encodedId + "&test_mode=1&symbol=" + _Symbol + "&direction=" + pendingDirection;
-    }
-    else
-    {
-        string encodedId = UrlEncode(pendingTradeId);
-        url = FlaskURL + "/api/execute_trade?trade_id=" + encodedId;
-    }
-    string response;
-    bool ok = SendGetRequest(url, response);
+   string url;
+   if(TEST_MODE)
+   {
+      string encodedId = UrlEncode(pendingTradeId);
+      url = FlaskURL + "/api/execute_trade?trade_id=" + encodedId + "&test_mode=1&symbol=" + _Symbol + "&direction=" + pendingDirection;
+   }
+   else
+   {
+      string encodedId = UrlEncode(pendingTradeId);
+      url = FlaskURL + "/api/execute_trade?trade_id=" + encodedId;
+   }
+   string response;
+   bool ok = SendGetRequest(url, response);
 
-    if(!ok)
-    {
-        Print("ERROR: Failed to send execution request.");
-        currentState = STATE_ERROR;
-        Comment("FAILED\nConnection error");
-        Sleep(5000);
-        currentState = STATE_IDLE;
-        pendingTradeId = "";
-        pendingDirection = "";
-        trackedTradeId = "";
-        candleCloseTime = 0;
-        armedTime = 0;
-        Comment("");
-        return;
+   if(!ok)
+   {
+       Print("ERROR: Failed to send execution request.");
+       currentState = STATE_ERROR;
+       Comment("FAILED\nConnection error");
+       Sleep(5000);
+       currentState = STATE_IDLE;
+       pendingTradeId = "";
+       pendingDirection = "";
+       trackedTradeId = "";
+       candleCloseTime = 0;
+       armedTime = 0;
+       armedBarTime = 0;
+       Comment("");
+       return;
     }
 
     Print("Execution response: ", response);
 
-    if(StringFind(response, "\"status\":\"executed\"") >= 0)
-    {
-        Print("======================================");
-        Print("TRADE EXECUTED");
-        Print("Response: ", response);
-        Print("======================================");
+   if(StringFind(response, "\"status\":\"executed\"") >= 0)
+   {
+      Print("======================================");
+      Print("TRADE EXECUTED");
+      Print("Response: ", response);
+      Print("======================================");
 
-        currentState = STATE_EXECUTED;
-        Comment("EXECUTED\nCheck dashboard for details");
+      currentState = STATE_EXECUTED;
+      Comment("EXECUTED\nCheck dashboard for details");
 
-        Sleep(10000);
-        currentState = STATE_IDLE;
-        pendingTradeId = "";
-        pendingDirection = "";
-        trackedTradeId = "";
-        candleCloseTime = 0;
-        armedTime = 0;
-        Comment("");
+       Sleep(10000);
+       currentState = STATE_IDLE;
+       pendingTradeId = "";
+       pendingDirection = "";
+       trackedTradeId = "";
+       candleCloseTime = 0;
+       armedTime = 0;
+       armedBarTime = 0;
+       Comment("");
     }
     else
     {
-        string errorCode = ExtractJsonValue(response, "retcode");
-        string errorComment = ExtractJsonValue(response, "comment");
+       string errorCode = ExtractJsonValue(response, "retcode");
+       string errorComment = ExtractJsonValue(response, "comment");
 
-        Print("ERROR: Execution failed. Code: ", errorCode, " Comment: ", errorComment);
-        currentState = STATE_ERROR;
-        Comment("FAILED\n", errorComment);
-        Sleep(5000);
-        currentState = STATE_IDLE;
-        pendingTradeId = "";
-        pendingDirection = "";
-        trackedTradeId = "";
-        candleCloseTime = 0;
-        armedTime = 0;
-        Comment("");
+       Print("ERROR: Execution failed. Code: ", errorCode, " Comment: ", errorComment);
+      currentState = STATE_ERROR;
+       Comment("FAILED\n", errorComment);
+       Sleep(5000);
+       currentState = STATE_IDLE;
+       pendingTradeId = "";
+       pendingDirection = "";
+       trackedTradeId = "";
+       candleCloseTime = 0;
+       armedTime = 0;
+       armedBarTime = 0;
+       Comment("");
     }
 }
 
@@ -334,11 +350,11 @@ bool SendGetRequest(string url, string &response)
 
 string UrlEncode(string value)
 {
-   value = StringReplace(value, ":", "%3A");
-   value = StringReplace(value, " ", "%20");
-   value = StringReplace(value, "+", "%2B");
-   value = StringReplace(value, "#", "%23");
-   value = StringReplace(value, "%", "%25");
+   StringReplace(value, ":", "%3A");
+   StringReplace(value, " ", "%20");
+   StringReplace(value, "+", "%2B");
+   StringReplace(value, "#", "%23");
+   StringReplace(value, "%", "%25");
    return value;
 }
 
@@ -364,9 +380,9 @@ string ExtractJsonValue(string json, string key)
    }
 
    string num = "";
-   while(pos < StringLen(json) &&
-         (json[pos] >= '0' && json[pos] <= '9' ||
-          json[pos] == '.' || json[pos] == '-' || json[pos] == 'e' || json[pos] == 'E'))
+    while(pos < StringLen(json) &&
+          ((json[pos] >= '0' && json[pos] <= '9') ||
+           json[pos] == '.' || json[pos] == '-' || json[pos] == 'e' || json[pos] == 'E'))
    {
       num += json[pos];
       pos++;
