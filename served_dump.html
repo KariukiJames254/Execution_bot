@@ -1,0 +1,1164 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Execution Bot</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', Arial, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
+h1 { color: #58a6ff; margin-bottom: 20px; }
+h2 { color: #8b949e; margin: 20px 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 15px; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+.card label { font-size: 11px; color: #8b949e; text-transform: uppercase; display: block; margin-bottom: 8px; font-weight: 600; letter-spacing: 0.5px; }
+.card .value { font-size: 20px; font-weight: bold; margin-top: 4px; }
+.card .value.green { color: #3fb950; }
+.card .value.red { color: #f85149; }
+.card .value.blue { color: #58a6ff; }
+.card .value.yellow { color: #d29922; }
+.card .value.orange { color: #d29922; }
+.btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; margin: 5px; }
+.btn-buy { background: #238636; color: #fff; }
+.btn-sell { background: #da3633; color: #fff; }
+.btn-exec { background: #238636; color: #fff; font-size: 16px; padding: 14px 40px; }
+.btn:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 12px; }
+.form-group { display: flex; flex-direction: column; }
+.form-group label { font-size: 11px; color: #8b949e; margin-bottom: 6px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }
+.form-group input, .form-group select { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 10px 12px; border-radius: 6px; width: 140px; font-size: 14px; transition: border-color 0.2s, box-shadow 0.2s; }
+.form-group input:focus, .form-group select:focus { outline: none; border-color: #58a6ff; box-shadow: 0 0 0 3px rgba(88,166,255,0.15); }
+.form-group input:hover, .form-group select:hover { border-color: #8b949e; }
+.form-group input:disabled { opacity: 0.6; cursor: not-allowed; background: #161b22; }
+.radio-group { display: flex; gap: 12px; align-items: center; }
+.radio-group label { font-size: 12px; color: #c9d1d9; cursor: pointer; padding: 6px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; transition: background 0.2s; }
+.radio-group label:hover { background: #161b22; border-color: #8b949e; }
+.radio-group input { width: auto; margin-right: 4px; }
+.radio-group input:checked + span { color: #58a6ff; }
+.log-box { background: #010409; border: 1px solid #30363d; border-radius: 8px; padding: 12px; height: 260px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 12px; line-height: 1.6; }
+.log-entry { padding: 2px 0; border-bottom: 1px solid #21262d; }
+.log-info { color: #58a6ff; }
+.log-warn { color: #d29922; }
+.log-error { color: #f85149; }
+.log-success { color: #3fb950; }
+.status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+.status-connected { background: #3fb950; }
+.status-disconnected { background: #f85149; }
+.calc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+.calc-grid .card { text-align: center; }
+.calc-grid .card .value { font-size: 16px; }
+.preview-section { background: #1c2128; border: 2px solid #58a6ff; border-radius: 8px; padding: 15px; margin-top: 15px; }
+.preview-section h3 { color: #58a6ff; margin-bottom: 10px; font-size: 13px; text-transform: uppercase; }
+.hidden { display: none !important; }
+.input-card { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
+.input-card label { font-size: 11px; color: #8b949e; text-transform: uppercase; display: block; margin-bottom: 8px; font-weight: 600; letter-spacing: 0.5px; }
+.input-card input, .input-card select { background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 10px 12px; border-radius: 6px; width: 100%; font-size: 14px; transition: border-color 0.2s, box-shadow 0.2s; }
+.input-card input:focus, .input-card select:focus { outline: none; border-color: #58a6ff; box-shadow: 0 0 0 3px rgba(88,166,255,0.15); }
+.input-card input:hover, .input-card select:hover { border-color: #8b949e; }
+.stage-list { list-style: none; padding: 0; margin: 0; }
+.stage-list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 13px; }
+.stage-list li:last-child { border-bottom: none; }
+.stage-dot { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; flex-shrink: 0; }
+.stage-done { background: #238636; color: #fff; }
+.stage-pending { background: #30363d; color: #8b949e; }
+.stage-active { background: #d29922; color: #0d1117; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.history-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.history-table th, .history-table td { text-align: left; padding: 8px; border-bottom: 1px solid #21262d; font-size: 13px; }
+.history-table th { color: #8b949e; font-weight: 600; text-transform: uppercase; font-size: 11px; }
+.countdown { font-size: 32px; font-weight: bold; color: #58a6ff; text-align: center; margin-top: 8px; }
+.warning-box { background: rgba(210, 153, 34, 0.1); border: 1px solid #d29922; border-radius: 6px; padding: 10px; margin-top: 10px; color: #d29922; font-size: 13px; }
+.exec-result-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+.exec-result-grid .card { text-align: center; }
+.exec-result-grid .card .value { font-size: 16px; }
+</style>
+</head>
+<body>
+<h1>&#x1F7E2; Execution Bot</h1>
+
+<h2>Connection</h2>
+<div class="grid">
+  <div class="card">
+    <label>Status</label>
+    <div class="value green" id="conn_status">
+      <span class="status-dot status-connected"></span>
+      Connected
+    </div>
+    
+  </div>
+  <div class="card">
+    <label>Broker</label>
+    <div class="value blue">MetaTrader 5</div>
+  </div>
+  <div class="card">
+    <label>Login</label>
+    <div class="value blue">5053477673</div>
+  </div>
+  <div class="card">
+    <label>Balance</label>
+    <div class="value green" id="balance">$100,059.65</div>
+  </div>
+  <div class="card">
+    <label>Equity</label>
+    <div class="value green" id="equity">$100,059.65</div>
+  </div>
+  <div class="card">
+    <label>Open P&L</label>
+    <div class="value" id="total_pnl">$0.00</div>
+  </div>
+</div>
+
+<h2>Open Positions</h2>
+<div class="card" id="positions">
+  <div style="color: #8b949e;">No positions loaded</div>
+</div>
+
+<h2>Statistics</h2>
+<div class="grid" id="stats_grid">
+  <div class="card">
+    <label>Total Trades</label>
+    <div class="value" id="stat_total_trades">0</div>
+  </div>
+  <div class="card">
+    <label>Trades Today</label>
+    <div class="value" id="stat_trades_today">0</div>
+  </div>
+  <div class="card">
+    <label>Win Rate</label>
+    <div class="value" id="stat_win_rate">0%</div>
+  </div>
+  <div class="card">
+    <label>Loss Rate</label>
+    <div class="value" id="stat_loss_rate">0%</div>
+  </div>
+  <div class="card">
+    <label>Profit Factor</label>
+    <div class="value" id="stat_profit_factor">0</div>
+  </div>
+  <div class="card">
+    <label>Expectancy</label>
+    <div class="value" id="stat_expectancy">$0</div>
+  </div>
+  <div class="card">
+    <label>Avg Win</label>
+    <div class="value green" id="stat_avg_win">$0</div>
+  </div>
+  <div class="card">
+    <label>Avg Loss</label>
+    <div class="value red" id="stat_avg_loss">$0</div>
+  </div>
+  <div class="card">
+    <label>Largest Win</label>
+    <div class="value green" id="stat_largest_win">$0</div>
+  </div>
+  <div class="card">
+    <label>Largest Loss</label>
+    <div class="value red" id="stat_largest_loss">$0</div>
+  </div>
+  <div class="card">
+    <label>Max Drawdown</label>
+    <div class="value red" id="stat_max_drawdown">0%</div>
+  </div>
+  <div class="card">
+    <label>Daily Drawdown</label>
+    <div class="value red" id="stat_daily_drawdown">0%</div>
+  </div>
+  <div class="card">
+    <label>Consec Wins</label>
+    <div class="value green" id="stat_consec_wins">0</div>
+  </div>
+  <div class="card">
+    <label>Consec Losses</label>
+    <div class="value red" id="stat_consec_losses">0</div>
+  </div>
+  <div class="card">
+    <label>Avg Hold Time</label>
+    <div class="value" id="stat_avg_hold">0s</div>
+  </div>
+  <div class="card">
+    <label>Open Positions</label>
+    <div class="value" id="stat_open_positions">0</div>
+  </div>
+</div>
+
+<h2>Trade Settings</h2>
+<div class="grid" id="settings_grid">
+  <div class="input-card">
+    <label>Symbol</label>
+    <select id="symbol" onchange="onSymbolChange()" >
+      
+        <option value="AUDUSD" >AUDUSD</option>
+      
+        <option value="BTCUSD" >BTCUSD</option>
+      
+        <option value="ETHUSD" >ETHUSD</option>
+      
+        <option value="EURGBP" >EURGBP</option>
+      
+        <option value="EURJPY" >EURJPY</option>
+      
+        <option value="EURUSD" selected>EURUSD</option>
+      
+        <option value="GBPJPY" >GBPJPY</option>
+      
+        <option value="GBPUSD" >GBPUSD</option>
+      
+        <option value="GER40" >GER40</option>
+      
+        <option value="NAS100" >NAS100</option>
+      
+        <option value="NZDUSD" >NZDUSD</option>
+      
+        <option value="SPX500" >SPX500</option>
+      
+        <option value="UK100" >UK100</option>
+      
+        <option value="US100" >US100</option>
+      
+        <option value="US30" >US30</option>
+      
+        <option value="USDCAD" >USDCAD</option>
+      
+        <option value="USDCHF" >USDCHF</option>
+      
+        <option value="USDJPY" >USDJPY</option>
+      
+        <option value="XAGUSD" >XAGUSD</option>
+      
+        <option value="XAUUSD" >XAUUSD</option>
+      
+    </select>
+  </div>
+  <div class="input-card">
+    <label>Risk Amount</label>
+    <input type="number" id="risk_amount" value="100.0" step="10" min="1" oninput="updateSettings()" >
+  </div>
+  <div class="input-card">
+    <label>Risk Mode</label>
+    <div class="radio-group">
+      <label><input type="radio" name="risk_mode" value="amt" checked onchange="updateSettings()" > <span>$</span></label>
+      <label><input type="radio" name="risk_mode" value="pct" onchange="updateSettings()" > <span>%</span></label>
+    </div>
+  </div>
+  <div class="input-card">
+    <label>Reward Ratio</label>
+    <input type="number" id="rr_ratio" value="2.0" step="0.5" min="0.5" oninput="updateSettings()" >
+  </div>
+  <div class="input-card">
+    <label>Break Even (RR)</label>
+    <input type="number" id="be_rr" value="1.0" step="0.1" min="0.1" oninput="updateSettings()" >
+  </div>
+</div>
+
+
+
+<div class="form-row" style="margin-top:15px;display:none;" id="armed_actions">
+  <div class="card" style="flex:1;text-align:center;">
+    <label>Armed Direction</label>
+    <div class="value" id="armed_direction">red"></div>
+    <label style="margin-top:8px;font-size:11px;color:#8b949e;">Waiting for candle close...</label>
+  </div>
+  <button class="btn" style="background:#da3633;color:#fff;" onclick="cancelTrade()">✕ Cancel Pending Trade</button>
+</div>
+
+<div class="card" style="border-color:#da3633;margin-top:15px;display:none;" id="cancelled_actions">
+  <div class="value red" style="text-align:center;">Trade Cancelled</div>
+</div>
+
+<div class="card" style="border-color:#da3633;margin-top:15px;display:none;" id="error_actions">
+  <div class="value red" style="text-align:center;">Execution Failed: </div>
+</div>
+
+<h2>EA Input</h2>
+<div class="card">
+  <p style="color:#8b949e;font-size:13px;margin-bottom:10px;">Highlight a candle in MT5, then arm the trade below. The EA will wait for candle close and execute automatically.</p>
+  <div class="form-row" id="ea_buttons">
+    <button class="btn btn-exec" style="background:#238636;" onclick="armTrade('BUY')">🛡 ARM BUY</button>
+    <button class="btn btn-exec" style="background:#da3633;" onclick="armTrade('SELL')">🛡 ARM SELL</button>
+  </div>
+</div>
+
+<h2>Trade History</h2>
+<div class="card" id="history_card">
+  <table class="history-table">
+    <thead>
+      <tr><th>Time</th><th>Symbol</th><th>Direction</th><th>Lot</th><th>Entry</th><th>Slippage</th><th>Result</th></tr>
+    </thead>
+    <tbody id="history_body">
+      
+      <tr>
+        <td>18:34</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>7.00</td>
+        <td>1.13746</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:32</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>5.54</td>
+        <td>1.13741</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:31</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>10.23</td>
+        <td>1.13758</td>
+        <td>0.6 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:29</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>22.18</td>
+        <td>1.13761</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:26</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>26.61</td>
+        <td>1.13744</td>
+        <td>0.9 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:18</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>14.78</td>
+        <td>1.13724</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:18</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>13.31</td>
+        <td>1.13732</td>
+        <td>0.2 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:17</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>14.78</td>
+        <td>1.13720</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:11</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>3.59</td>
+        <td>1.13698</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:09</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>9.50</td>
+        <td>1.13719</td>
+        <td>0.2 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:07</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>8.32</td>
+        <td>1.13720</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:06</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>6.34</td>
+        <td>1.13719</td>
+        <td>0.5 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:05</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>7.83</td>
+        <td>1.13718</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:05</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>14.78</td>
+        <td>1.13725</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:04</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>13.31</td>
+        <td>1.13734</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:02</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>8.87</td>
+        <td>1.13714</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:02</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>26.61</td>
+        <td>1.13723</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:01</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>8.31</td>
+        <td>1.13711</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>18:00</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>7.82</td>
+        <td>1.13708</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:57</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>3.60</td>
+        <td>1.13712</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:54</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>2.38</td>
+        <td>1.13694</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:54</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>2.42</td>
+        <td>1.13696</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:53</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>2.83</td>
+        <td>1.13702</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:53</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>3.25</td>
+        <td>1.13709</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:52</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>3.70</td>
+        <td>1.13713</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:51</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>11.09</td>
+        <td>1.13716</td>
+        <td>0.3 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:14</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>9.51</td>
+        <td>1.13756</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:14</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>12.11</td>
+        <td>1.13759</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:12</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>7.40</td>
+        <td>1.13751</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:11</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>5.55</td>
+        <td>1.13746</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:11</td>
+        <td>EURUSD</td>
+        <td style="color:#3fb950;">BUY</td>
+        <td>3.17</td>
+        <td>1.13754</td>
+        <td>0.2 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:10</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>9.51</td>
+        <td>1.13756</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:09</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>6.05</td>
+        <td>1.13748</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:09</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>12.10</td>
+        <td>1.13758</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:05</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>22.19</td>
+        <td>1.13753</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>17:04</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>26.63</td>
+        <td>1.13750</td>
+        <td>0.5 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>16:57</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>2.18</td>
+        <td>1.13749</td>
+        <td>0.4 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>16:55</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>2.89</td>
+        <td>1.13753</td>
+        <td>1.5 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>16:52</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>8.88</td>
+        <td>1.13788</td>
+        <td>1.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>16:50</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>10.24</td>
+        <td>1.13800</td>
+        <td>0.1 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>16:33</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>3.03</td>
+        <td>1.13789</td>
+        <td>0.4 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>16:19</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>7.83</td>
+        <td>1.13823</td>
+        <td>0.3 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>15:52</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>16.64</td>
+        <td>1.13823</td>
+        <td>0.8 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+      <tr>
+        <td>15:25</td>
+        <td>EURUSD</td>
+        <td style="color:#f85149;">SELL</td>
+        <td>6.05</td>
+        <td>1.13842</td>
+        <td>0.0 pips</td>
+        <td style="color:#3fb950;">Executed</td>
+      </tr>
+      
+    </tbody>
+  </table>
+  
+  <div id="history_pagination" style="padding: 10px 0; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap;"></div>
+</div>
+
+<h2>Live Market Price</h2>
+<div class="grid">
+  <div class="card">
+    <label>Bid</label>
+    <div class="value" id="bid">$1.13744</div>
+  </div>
+  <div class="card">
+    <label>Ask</label>
+    <div class="value" id="ask">$1.13745</div>
+  </div>
+  <div class="card">
+    <label>Spread</label>
+    <div class="value" id="spread">---</div>
+  </div>
+</div>
+
+<h2>Bot Log</h2>
+<div class="log-box" id="log-box">
+  
+  <div class="log-entry log-info">16:54:09 UI server starting...</div>
+  
+</div>
+
+<script>
+var cachedBid = null;
+var cachedAsk = null;
+var pendingDirection = null;
+var countdownInterval = null;
+var lastLogCount = 0;
+var historyPage = 1;
+var historyLimit = 20;
+
+function getSelectedSymbol() {
+  return document.getElementById('symbol').value;
+}
+
+function onSymbolChange() {
+  updateSettings();
+}
+
+function updateSettings() {
+  var risk = parseFloat(document.getElementById('risk_amount').value) || 100;
+  var rr = parseFloat(document.getElementById('rr_ratio').value) || 2;
+  var beRr = parseFloat(document.getElementById('be_rr').value) || 1;
+  var riskMode = document.querySelector('input[name="risk_mode"]:checked') ? document.querySelector('input[name="risk_mode"]:checked').value : 'amt';
+  
+  fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      risk_amount: risk,
+      rr_ratio: rr,
+      be_rr: beRr,
+      risk_mode: riskMode,
+    })
+  });
+}
+
+function armTrade(direction) {
+  console.log('armTrade START', direction);
+  var statusEl = document.getElementById('exec_status');
+  if (statusEl) statusEl.textContent = 'Starting ' + direction + ' trade...';
+  var symbol = getSelectedSymbol();
+  var riskAmt = parseFloat(document.getElementById('risk_amount').value) || 100;
+  var rr = parseFloat(document.getElementById('rr_ratio').value) || 2;
+  var beRr = parseFloat(document.getElementById('be_rr').value) || 1;
+  var riskMode = document.querySelector('input[name="risk_mode"]:checked') ? document.querySelector('input[name="risk_mode"]:checked').value : 'amt';
+
+  console.log('armTrade vars', { symbol: symbol, riskAmt: riskAmt, connected: isConnected() });
+
+  if (!isConnected()) {
+    updateStatus('MT5 is not connected. Please reconnect.');
+    console.warn('armTrade aborted: not connected');
+    setButtonsDisabled(false);
+    return;
+  }
+
+  setButtonsDisabled(true);
+  console.log('armTrade buttons disabled, starting fetch');
+
+  fetch('/api/candle_data', {
+    headers: { 'X-Symbol': symbol }
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      console.log('candle_data response', data);
+      if (data.error) {
+        updateStatus('Error: ' + data.error);
+        setButtonsDisabled(false);
+        return;
+      }
+
+      return fetch('/api/price', {
+        headers: { 'X-Symbol': symbol }
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(priceData) {
+          console.log('price response', priceData);
+          if (!priceData.bid || !priceData.ask) {
+            updateStatus('Could not fetch market price.');
+            setButtonsDisabled(false);
+            return;
+          }
+
+          var entry = direction === 'BUY' ? priceData.ask : priceData.bid;
+
+          return fetch('/api/prepare_trade', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Symbol': symbol
+            },
+            body: JSON.stringify({
+              symbol: symbol,
+              direction: direction,
+              timeframe: 'M15',
+              open: data.open,
+              high: data.high,
+              low: data.low,
+              close: data.close,
+              time: data.time,
+              risk_amount: riskAmt,
+              risk_mode: riskMode,
+              rr_ratio: rr,
+              be_rr: beRr,
+            })
+          })
+            .then(function(r) { return r.json(); })
+            .then(function(prepData) {
+              console.log('prepare_trade response', prepData);
+              if (prepData.error) {
+                updateStatus('Error: ' + prepData.error);
+                setButtonsDisabled(false);
+                return;
+              }
+              pendingDirection = direction;
+              updateStatus(direction + ' trade armed. Waiting for candle close...');
+              window.location.href = '?trade_id=' + prepData.trade_id;
+            });
+        });
+    })
+    .catch(function(err) {
+      console.error('armTrade chain failed', err);
+      updateStatus('Network error: ' + err.message);
+      setButtonsDisabled(false);
+    });
+}
+
+function cancelTrade() {
+  var urlParams = new URLSearchParams(window.location.search);
+  var tradeId = urlParams.get('trade_id');
+  
+  if (!tradeId) {
+    updateStatus('No active trade to cancel.');
+    return;
+  }
+
+  if (!confirm('Are you sure you want to cancel this pending trade?')) {
+    return;
+  }
+
+  fetch('/api/cancel_trade', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trade_id: tradeId })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.status === 'cancelled') {
+      updateStatus('Trade cancelled by user.');
+      pendingDirection = null;
+      setTimeout(function() { window.location.href = '/'; }, 1500);
+    } else {
+      updateStatus(data.error || 'Failed to cancel trade.');
+    }
+  });
+}
+
+function closePosition(ticket) {
+  fetch('/api/close_position', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticket: ticket })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'closed') {
+        updateStatus('Position ' + ticket + ' closed.');
+        refreshData();
+      } else {
+        updateStatus(data.error || 'Failed to close position.');
+      }
+    });
+}
+
+function setButtonsDisabled(disabled) {
+  var btns = document.querySelectorAll('#arm_buttons button, #ea_buttons button');
+  btns.forEach(function(btn) {
+    if (btn && !btn.classList.contains('cancel-btn')) btn.disabled = disabled;
+  });
+  var inputs = document.querySelectorAll('#settings_grid input, #settings_grid select');
+  inputs.forEach(function(input) {
+    if (input) input.disabled = disabled;
+  });
+}
+
+function updateStatus(message) {
+  var el = document.getElementById('exec_status');
+  if (el) el.textContent = message;
+}
+
+function changeHistoryPage(page) {
+  if (page < 1) return;
+  historyPage = page;
+  loadHistory();
+}
+
+function loadHistory() {
+
+function isConnected() {
+  return document.getElementById('conn_status') && document.getElementById('conn_status').innerHTML.indexOf('Connected') !== -1;
+}
+
+function reconnectMT5() {
+  fetch('/api/reconnect', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.connected) {
+        alert('MT5 reconnected successfully');
+        location.reload();
+      } else {
+        alert('Reconnect failed. Check MT5 terminal.');
+      }
+    })
+    .catch(function(e) { alert('Reconnect error: ' + e); });
+}
+
+function refreshData() {
+  var symbol = getSelectedSymbol();
+  var urlParams = new URLSearchParams(window.location.search);
+  var tradeId = urlParams.get('trade_id');
+
+  var statusUrl = '/api/status';
+  if (tradeId) {
+    statusUrl += '?trade_id=' + encodeURIComponent(tradeId);
+  }
+
+  fetch(statusUrl, {
+    headers: { 'X-Symbol': symbol }
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var statusEl = document.getElementById('conn_status');
+      if (statusEl) {
+        statusEl.innerHTML = '<span class="status-dot ' + (data.connected ? 'status-connected' : 'status-disconnected') + '"></span>' + (data.connected ? 'Connected' : 'Disconnected');
+        statusEl.className = 'value ' + (data.connected ? 'green' : 'red');
+      }
+      document.getElementById('balance').textContent = data.balance ? '$' + data.balance.toFixed(2) : '---';
+      document.getElementById('equity').textContent = data.equity ? '$' + data.equity.toFixed(2) : '---';
+      if (data.bid) {
+        cachedBid = data.bid;
+        cachedAsk = data.ask;
+        document.getElementById('bid').textContent = data.bid.toFixed(5);
+        document.getElementById('ask').textContent = data.ask.toFixed(5);
+        document.getElementById('spread').textContent = ((data.ask - data.bid) * 10000).toFixed(1) + ' pips';
+      }
+
+      var pending = data.pending_trade || {};
+      
+      if (pending.status === 'armed' || data.open_positions > 0) {
+        setButtonsDisabled(true);
+      } else {
+        setButtonsDisabled(false);
+      }
+      
+      if (!countdownInterval) countdownInterval = setInterval(refreshData, 1000);
+      
+      if (pending.status === 'armed' && data.countdown_str) {
+        var countdownEl = document.getElementById('countdown');
+        if (countdownEl) countdownEl.textContent = data.countdown_str;
+      }
+
+      var armedActions = document.getElementById('armed_actions');
+      var cancelledActions = document.getElementById('cancelled_actions');
+      var errorActions = document.getElementById('error_actions');
+      var countdownEl = document.getElementById('countdown');
+      var countdownLabel = document.getElementById('countdown_label');
+
+      if (armedActions) armedActions.style.display = pending.status === 'armed' ? '' : 'none';
+      if (cancelledActions) cancelledActions.style.display = pending.status === 'cancelled' ? '' : 'none';
+      if (errorActions) errorActions.style.display = pending.status === 'error' ? '' : 'none';
+      if (countdownEl) countdownEl.style.display = pending.status === 'armed' ? '' : 'none';
+      if (countdownLabel) countdownLabel.style.display = pending.status === 'armed' ? '' : 'none';
+
+      if (pending.stages) {
+          var stageList = document.getElementById('stage_list');
+          if (stageList) {
+            stageList.innerHTML = pending.stages.map(function(stage) {
+              var dotClass = stage.done ? 'stage-done' : 'stage-pending';
+              var symbol = stage.done ? '✓' : '○';
+              return '<li><span class="stage-dot ' + dotClass + '">' + symbol + '</span><span>' + stage.name + '</span></li>';
+            }).join('');
+          }
+        }
+      }
+    });
+
+  fetch('/api/positions', {
+    headers: { 'X-Symbol': symbol }
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var positions = data.positions || [];
+      var total = data.total_profit || 0;
+      var pnlEl = document.getElementById('total_pnl');
+      if (pnlEl) {
+        pnlEl.textContent = (total >= 0 ? '$' : '-$') + Math.abs(total).toFixed(2);
+        pnlEl.className = 'value ' + (total >= 0 ? 'green' : 'red');
+      }
+
+      var el = document.getElementById('positions');
+      if (!positions.length) { el.innerHTML = '<div style="color:#8b949e;">No open positions</div>'; return; }
+      el.innerHTML = positions.map(function(p) {
+        return '<div style="padding:8px;border-bottom:1px solid #21262d;">' +
+          '<strong>' + (p.type == 0 ? 'BUY' : 'SELL') + '</strong> ' +
+          p.symbol + ' | Vol: ' + p.volume +
+          ' | Entry: ' + p.price_open.toFixed(5) +
+          ' | SL: ' + p.sl.toFixed(5) +
+          ' | TP: ' + p.tp.toFixed(5) +
+          ' | PnL: ' + p.profit.toFixed(2) +
+          ' <button class="btn" style="background:#da3633;color:#fff;padding:2px 8px;font-size:11px;margin-left:8px;" onclick="closePosition(' + p.ticket + ')">Close</button>' +
+          '</div>';
+      }).join('');
+    });
+
+  fetch('/api/monitor', { method: 'GET' })
+    .then(function(r) { return r.json(); })
+    .catch(function() {});
+
+  fetch('/api/logs')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var el = document.getElementById('log-box');
+      if (data.length === 0) { el.innerHTML = ''; return; }
+      var newHtml = data.map(function(e) {
+        return '<div class=\"log-entry ' + e.level + '\">' + e.time + ' ' + e.message + '</div>';
+      }).join('');
+      if (el.innerHTML !== newHtml) {
+        el.innerHTML = newHtml;
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+
+  fetch('/api/history?page=' + historyPage + '&limit=' + historyLimit)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var tbody = document.getElementById('history_body');
+      if (!tbody) return;
+      if (!data.items || !data.items.length) {
+        tbody.innerHTML = '';
+        return;
+      }
+      tbody.innerHTML = data.items.map(function(trade) {
+        return '<tr>' +
+          '<td>' + trade.time + '</td>' +
+          '<td>' + trade.symbol + '</td>' +
+          '<td style="color:' + (trade.direction === 'BUY' ? '#3fb950' : '#f85149') + ';">' + trade.direction + '</td>' +
+          '<td>' + trade.lot.toFixed(2) + '</td>' +
+          '<td>' + trade.entry.toFixed(5) + '</td>' +
+          '<td>' + (trade.slippage * 10000).toFixed(1) + ' pips</td>' +
+          '<td style="color:#3fb950;">' + trade.status + '</td>' +
+          '</tr>';
+      }).join('');
+
+      var pagination = document.getElementById('history_pagination');
+      if (!pagination) return;
+      if (data.pages <= 1) {
+        pagination.innerHTML = '';
+        return;
+      }
+
+      var html = '';
+      html += '<button class="btn" style="padding:4px 10px;font-size:12px;" ' + (data.page <= 1 ? 'disabled' : '') + ' onclick="changeHistoryPage(' + (data.page - 1) + ')">Previous</button>';
+      html += '<span style="color:#8b949e;font-size:12px;">Page ' + data.page + ' of ' + data.pages + '</span>';
+      html += '<button class="btn" style="padding:4px 10px;font-size:12px;" ' + (data.page >= data.pages ? 'disabled' : '') + ' onclick="changeHistoryPage(' + (data.page + 1) + ')">Next</button>';
+      pagination.innerHTML = html;
+    });
+
+  fetch('/api/stats')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.total_trades !== undefined) {
+        document.getElementById('stat_total_trades').textContent = data.total_trades || 0;
+        document.getElementById('stat_trades_today').textContent = data.trades_today || 0;
+        document.getElementById('stat_win_rate').textContent = (data.win_rate || 0) + '%';
+        document.getElementById('stat_loss_rate').textContent = (data.loss_rate || 0) + '%';
+        document.getElementById('stat_profit_factor').textContent = (data.profit_factor || 0).toFixed(2);
+        document.getElementById('stat_expectancy').textContent = '$' + (data.expectancy || 0).toFixed(2);
+        document.getElementById('stat_avg_win').textContent = '$' + (data.avg_win || 0).toFixed(2);
+        document.getElementById('stat_avg_loss').textContent = '$' + (data.avg_loss || 0).toFixed(2);
+        document.getElementById('stat_largest_win').textContent = '$' + (data.largest_win || 0).toFixed(2);
+        document.getElementById('stat_largest_loss').textContent = '$' + (data.largest_loss || 0).toFixed(2);
+        document.getElementById('stat_max_drawdown').textContent = (data.max_drawdown || 0).toFixed(2) + '%';
+        document.getElementById('stat_daily_drawdown').textContent = (data.daily_drawdown || 0).toFixed(2) + '%';
+        document.getElementById('stat_consec_wins').textContent = data.consecutive_wins || 0;
+        document.getElementById('stat_consec_losses').textContent = data.consecutive_losses || 0;
+        document.getElementById('stat_avg_hold').textContent = formatHoldTime(data.avg_holding_time || 0);
+        document.getElementById('stat_open_positions').textContent = data.open_positions || 0;
+      }
+    });
+}
+
+function formatHoldTime(seconds) {
+  if (!seconds || seconds <= 0) return '0s';
+  var h = Math.floor(seconds / 3600);
+  var m = Math.floor((seconds % 3600) / 60);
+  var s = Math.floor(seconds % 60);
+  if (h > 0) return h + 'h ' + m + 'm';
+  if (m > 0) return m + 'm ' + s + 's';
+  return s + 's';
+}
+
+if (countdownInterval) clearInterval(countdownInterval);
+countdownInterval = setInterval(refreshData, 1000);
+refreshData();
+</script>
+
+</body>
+</html>

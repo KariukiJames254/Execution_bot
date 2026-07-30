@@ -1,5 +1,6 @@
 import MetaTrader5 as mt5
 from logger import setup_logger
+from notifications import notify
 
 logger = setup_logger("execution")
 
@@ -167,11 +168,11 @@ def set_break_even(position_ticket, symbol):
     digits = _get_digits(symbol)
 
     if pos.type == mt5.ORDER_TYPE_BUY:
-        new_sl = round(pos.price_open + 1 * point, digits)
+        new_sl = round(pos.price_open, digits)
         if not execute_sl_tp(mt5.ORDER_TYPE_BUY, tick.bid, new_sl, pos.tp):
             return False
     else:
-        new_sl = round(pos.price_open - 1 * point, digits)
+        new_sl = round(pos.price_open, digits)
         if not execute_sl_tp(mt5.ORDER_TYPE_SELL, tick.ask, new_sl, pos.tp):
             return False
 
@@ -188,6 +189,8 @@ def set_break_even(position_ticket, symbol):
         "type_filling": _get_filling(symbol),
     }
     result = _send_order(request, "BREAK-EVEN")
+    if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+        notify(f"🔵 <b>Break-Even Activated</b>\nTicket: {position_ticket}\nSL moved to: {new_sl}")
     return result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
 
 
@@ -204,17 +207,19 @@ def get_open_positions(symbol=None):
 def _send_order(request, label):
     check = mt5.order_check(request)
     if check is None:
-        logger.error(f"{label} order_check returned None: {mt5.last_error()}")
-        return None
+        err = mt5.last_error()
+        logger.error(f"{label} order_check returned None: {err}")
+        raise RuntimeError(f"order_check failed: {err}")
 
     if check.retcode != 0:
         logger.error(f"{label} order_check failed: retcode={check.retcode}, comment={check.comment}")
-        return check
+        raise RuntimeError(f"order_check failed: retcode={check.retcode}, comment={check.comment}")
 
     result = mt5.order_send(request)
     if result is None:
-        logger.error(f"{label} order_send returned None: {mt5.last_error()}")
-        return None
+        err = mt5.last_error()
+        logger.error(f"{label} order_send returned None: {err}")
+        raise RuntimeError(f"order_send failed: {err}")
 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         logger.error(
