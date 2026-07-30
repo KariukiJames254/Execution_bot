@@ -2,7 +2,7 @@
 //|                     ExecutionBridge.mq5                          |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "2.00"
+#property version   "2.01"
 #property strict
 
 input string FlaskURL   = "http://127.0.0.1:5000";  // CHANGE THIS to your VPS IP or domain when deploying
@@ -25,9 +25,15 @@ string Trim(string value);
 
 int OnInit()
 {
+<<<<<<< HEAD
     Print("Execution Bridge Started - NEW TIMING v2");
     EventSetTimer(1);
     return(INIT_SUCCEEDED);
+=======
+   Print("Execution Bridge Started - NEW TIMING v2");
+   EventSetTimer(1);
+   return(INIT_SUCCEEDED);
+>>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 }
 
 void OnDeinit(const int reason)
@@ -41,32 +47,48 @@ void OnTimer()
    if(currentState != STATE_IDLE && currentState != STATE_ARMED)
       return;
 
+<<<<<<< HEAD
     string url = FlaskURL + "/api/ea/pending?symbol=" + _Symbol + "&trade_id=" + UrlEncode(trackedTradeId);
+=======
+   string url = FlaskURL + "/api/ea/pending?symbol=" + _Symbol + "&trade_id=" + UrlEncode(trackedTradeId);
+>>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
    string response;
    bool ok = SendGetRequest(url, response);
 
    if(!ok)
    {
-      Print("Flask not reachable");
-      return;
-   }
+      Print("ERROR: Failed to send execution request.");
+      currentState = STATE_ERROR;
+      Comment("FAILED\nConnection error");
+      Sleep(5000);
+      currentState = STATE_IDLE;
+      pendingTradeId = "";
+      pendingDirection = "";
+      trackedTradeId = "";
+       candleCloseTime = 0;
+       armedTime = 0;
+       armedBarTime = 0;
+       Comment("");
+       return;
+    }
 
-   string tradeId = Trim(ExtractJsonValue(response, "trade_id"));
+    string tradeId = Trim(ExtractJsonValue(response, "trade_id"));
    string status = Trim(ExtractJsonValue(response, "status"));
 
    if(tradeId == "" || status == "")
       return;
 
-    if(trackedTradeId != tradeId && status == "armed")
-    {
-       string direction = Trim(ExtractJsonValue(response, "direction"));
-       string candleTimeStr = Trim(ExtractJsonValue(response, "candle_time"));
-       string timeframe = Trim(ExtractJsonValue(response, "timeframe"));
+   if(trackedTradeId != tradeId && status == "armed")
+   {
+      string direction = Trim(ExtractJsonValue(response, "direction"));
+      string candleTimeStr = Trim(ExtractJsonValue(response, "candle_time"));
+      string timeframe = Trim(ExtractJsonValue(response, "timeframe"));
 
-       trackedTradeId = tradeId;
-       pendingTradeId = tradeId;
-       pendingDirection = direction;
+      trackedTradeId = tradeId;
+      pendingTradeId = tradeId;
+      pendingDirection = direction;
 
+<<<<<<< HEAD
        int tf_minutes = 15;
        if(timeframe == "M1") tf_minutes = 1;
        else if(timeframe == "M5") tf_minutes = 5;
@@ -146,6 +168,87 @@ void OnTimer()
        Print("Waiting for candle close...");
        Print("======================================");
     }
+=======
+      int tf_minutes = 15;
+      if(timeframe == "M1") tf_minutes = 1;
+      else if(timeframe == "M5") tf_minutes = 5;
+      else if(timeframe == "M15") tf_minutes = 15;
+      else if(timeframe == "M30") tf_minutes = 30;
+      else if(timeframe == "H1") tf_minutes = 60;
+      else if(timeframe == "H4") tf_minutes = 240;
+      else if(timeframe == "D1") tf_minutes = 1440;
+
+        string candleCloseStr = Trim(ExtractJsonValue(response, "candle_close_unix"));
+        string digitsOnly = "";
+        for(int i = 0; i < StringLen(candleCloseStr); i++)
+        {
+           ushort ch = StringGetCharacter(candleCloseStr, i);
+           if(ch >= '0' && ch <= '9')
+              digitsOnly += StringSubstr(candleCloseStr, i, 1);
+        }
+        candleCloseTime = 0;
+        if(digitsOnly != "")
+           candleCloseTime = (datetime)StringToInteger(digitsOnly);
+
+        if(candleCloseTime <= 0)
+        {
+           datetime now = TimeCurrent();
+           MqlDateTime dt;
+           TimeToStruct(now, dt);
+           dt.sec = 0;
+
+           int safety = 0;
+           do
+           {
+              if(tf_minutes < 60)
+              {
+                 int remainder = dt.min % tf_minutes;
+                 if(remainder == 0)
+                    dt.min += tf_minutes;
+                 else
+                    dt.min = ((dt.min / tf_minutes) + 1) * tf_minutes;
+              }
+              else if(tf_minutes >= 1440)
+              {
+                 dt.hour = 0;
+                 dt.min = 0;
+                 dt.day++;
+              }
+              else
+              {
+                 int tf_hours = tf_minutes / 60;
+                 int remainder = dt.hour % tf_hours;
+                 if(remainder == 0 && dt.min == 0)
+                    dt.hour += tf_hours;
+                 else
+                    dt.hour = ((dt.hour / tf_hours) + 1) * tf_hours;
+                 dt.min = 0;
+              }
+
+              if(dt.min >= 60) { dt.min -= 60; dt.hour++; }
+              if(dt.hour >= 24) { dt.hour -= 24; dt.day++; }
+              candleCloseTime = StructToTime(dt);
+              safety++;
+           }
+           while(candleCloseTime <= now && safety < 50);
+        }
+
+       datetime now = TimeCurrent();
+       PrintFormat("ARMED tf=%s now=%d close=%d wait=%d sec candle=%s tradeId=%s candleCloseStr=%s", timeframe, now, candleCloseTime, (int)(candleCloseTime - now), candleTimeStr, tradeId, candleCloseStr);
+
+       currentState = STATE_ARMED;
+       armedTime = TimeCurrent();
+       armedBarTime = iTime(_Symbol, _Period, 0);
+
+      Print("======================================");
+      Print("TRADE ARMED");
+      Print("Direction: ", direction);
+      Print("Trade ID: ", tradeId);
+      Print("Candle: ", candleTimeStr);
+      Print("Waiting for candle close...");
+      Print("======================================");
+   }
+>>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 
      if(currentState == STATE_ARMED && candleCloseTime > 0)
      {
@@ -192,6 +295,7 @@ void ExecuteTrade()
    string response;
    bool ok = SendGetRequest(url, response);
 
+<<<<<<< HEAD
     if(!ok)
     {
        Print("ERROR: Failed to send execution request.");
@@ -206,6 +310,22 @@ void ExecuteTrade()
         armedTime = 0;
         armedBarTime = 0;
         Comment("");
+=======
+   if(!ok)
+   {
+       Print("ERROR: Failed to send execution request.");
+       currentState = STATE_ERROR;
+       Comment("FAILED\nConnection error");
+       Sleep(5000);
+       currentState = STATE_IDLE;
+       pendingTradeId = "";
+       pendingDirection = "";
+       trackedTradeId = "";
+       candleCloseTime = 0;
+       armedTime = 0;
+       armedBarTime = 0;
+       Comment("");
+>>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
        return;
     }
 
@@ -214,6 +334,7 @@ void ExecuteTrade()
     if(StringFind(response, "\"status\":\"executed\"") >= 0)
     {
        Print("EXECUTE_SUCCESS");
+<<<<<<< HEAD
 
        currentState = STATE_EXECUTED;
        Comment("EXECUTED\nCheck dashboard for details");
@@ -251,25 +372,66 @@ void ExecuteTrade()
          armedBarTime = 0;
          Comment("");
      }
+=======
+
+      currentState = STATE_EXECUTED;
+      Comment("EXECUTED\nCheck dashboard for details");
+
+       Sleep(10000);
+       currentState = STATE_IDLE;
+       pendingTradeId = "";
+       pendingDirection = "";
+       trackedTradeId = "";
+       candleCloseTime = 0;
+       armedTime = 0;
+       armedBarTime = 0;
+       Comment("");
+    }
+    else
+    {
+       string errorCode = ExtractJsonValue(response, "retcode");
+       string errorComment = ExtractJsonValue(response, "comment");
+       if(errorCode == "" && errorComment == "")
+       {
+          errorCode = ExtractJsonValue(response, "error");
+          errorComment = "";
+       }
+
+       Print("ERROR: Execution failed. Code: ", errorCode, " Comment: ", errorComment);
+       currentState = STATE_ERROR;
+       Comment("FAILED\n", errorComment);
+       Sleep(5000);
+       currentState = STATE_IDLE;
+       pendingTradeId = "";
+       pendingDirection = "";
+       trackedTradeId = "";
+       candleCloseTime = 0;
+       armedTime = 0;
+       armedBarTime = 0;
+       Comment("");
+    }
+>>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 }
 
 bool SendPostRequest(string url, string jsonPayload, string &response)
 {
-   uchar postData[];
-   StringToCharArray(jsonPayload, postData);
+    Print("Calling URL: ", url);
+    
+    uchar postData[];
+    StringToCharArray(jsonPayload, postData);
 
-   uchar result[];
-   string headers = "Content-Type: application/json\r\n";
-   string headers_out;
+    uchar result[];
+    string headers = "Content-Type: application/json\r\n";
+    string headers_out;
 
-   int res = WebRequest(
-      "POST",
-      url,
-      headers,
-      10000,
-      postData,
-      result,
-      headers_out
+    int res = WebRequest(
+        "POST",
+        url,
+        headers,
+        10000,
+        postData,
+        result,
+        headers_out
     );
 
     if(ArraySize(result) > 0)
@@ -291,15 +453,27 @@ bool SendPostRequest(string url, string jsonPayload, string &response)
        return true;
     }
 
+<<<<<<< HEAD
     Print("WebRequest POST failed. Code: ", res, " Response: ", response);
     if(res == -1)
        Print("Check MT5 Options -> Expert Advisors -> Allow WebRequest");
+=======
+    int err = GetLastError();
+    Print("==============================");
+    Print("URL        : ", url);
+    Print("HTTP Result: ", res);
+    Print("MT5 Error  : ", err);
+    Print("Response   : ", response);
+    Print("==============================");
+>>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 
     return false;
 }
 
 bool SendGetRequest(string url, string &response)
 {
+    Print("Calling URL: ", url);
+    
     uchar empty_data[];
     uchar result[];
     string headers = "";
@@ -320,6 +494,17 @@ bool SendGetRequest(string url, string &response)
        ArrayResize(result, ArraySize(result) + 1);
        result[ArraySize(result) - 1] = 0;
     }
+<<<<<<< HEAD
+=======
+
+    int len = 0;
+    for(int i = 0; i < ArraySize(result); i++)
+    {
+       if(result[i] == 0) break;
+       len++;
+    }
+    response = CharArrayToString(result, 0, len);
+>>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 
     int len = 0;
     for(int i = 0; i < ArraySize(result); i++)
@@ -329,6 +514,7 @@ bool SendGetRequest(string url, string &response)
     }
     response = CharArrayToString(result, 0, len);
 
+<<<<<<< HEAD
      if(res == 200)
      {
         return true;
@@ -339,6 +525,17 @@ bool SendGetRequest(string url, string &response)
         Print("Check MT5 Options -> Expert Advisors -> Allow WebRequest");
 
      return true;
+=======
+    int err = GetLastError();
+    Print("==============================");
+    Print("URL        : ", url);
+    Print("HTTP Result: ", res);
+    Print("MT5 Error  : ", err);
+    Print("Response   : ", response);
+    Print("==============================");
+
+    return true;
+>>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 }
 
 string UrlEncode(string value)
