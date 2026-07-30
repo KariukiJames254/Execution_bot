@@ -87,47 +87,63 @@ void OnTimer()
       else if(timeframe == "H4") tf_minutes = 240;
       else if(timeframe == "D1") tf_minutes = 1440;
 
-      datetime now = TimeCurrent();
-      MqlDateTime dt;
-      TimeToStruct(now, dt);
-      dt.sec = 0;
+        string candleCloseStr = Trim(ExtractJsonValue(response, "candle_close_unix"));
+        string digitsOnly = "";
+        for(int i = 0; i < StringLen(candleCloseStr); i++)
+        {
+           ushort ch = StringGetCharacter(candleCloseStr, i);
+           if(ch >= '0' && ch <= '9')
+              digitsOnly += StringSubstr(candleCloseStr, i, 1);
+        }
+        candleCloseTime = 0;
+        if(digitsOnly != "")
+           candleCloseTime = (datetime)StringToInteger(digitsOnly);
 
-      int safety = 0;
-      do
-      {
-         if(tf_minutes < 60)
-         {
-            int remainder = dt.min % tf_minutes;
-            if(remainder == 0)
-               dt.min += tf_minutes;
-            else
-               dt.min = ((dt.min / tf_minutes) + 1) * tf_minutes;
-         }
-         else if(tf_minutes >= 1440)
-         {
-            dt.hour = 0;
-            dt.min = 0;
-            dt.day++;
-         }
-         else
-         {
-            int tf_hours = tf_minutes / 60;
-            int remainder = dt.hour % tf_hours;
-            if(remainder == 0 && dt.min == 0)
-               dt.hour += tf_hours;
-            else
-               dt.hour = ((dt.hour / tf_hours) + 1) * tf_hours;
-            dt.min = 0;
-         }
+        if(candleCloseTime <= 0)
+        {
+           datetime now = TimeCurrent();
+           MqlDateTime dt;
+           TimeToStruct(now, dt);
+           dt.sec = 0;
 
-         if(dt.min >= 60) { dt.min -= 60; dt.hour++; }
-         if(dt.hour >= 24) { dt.hour -= 24; dt.day++; }
-         candleCloseTime = StructToTime(dt);
-         safety++;
-      }
-       while(candleCloseTime < now && safety < 50);
+           int safety = 0;
+           do
+           {
+              if(tf_minutes < 60)
+              {
+                 int remainder = dt.min % tf_minutes;
+                 if(remainder == 0)
+                    dt.min += tf_minutes;
+                 else
+                    dt.min = ((dt.min / tf_minutes) + 1) * tf_minutes;
+              }
+              else if(tf_minutes >= 1440)
+              {
+                 dt.hour = 0;
+                 dt.min = 0;
+                 dt.day++;
+              }
+              else
+              {
+                 int tf_hours = tf_minutes / 60;
+                 int remainder = dt.hour % tf_hours;
+                 if(remainder == 0 && dt.min == 0)
+                    dt.hour += tf_hours;
+                 else
+                    dt.hour = ((dt.hour / tf_hours) + 1) * tf_hours;
+                 dt.min = 0;
+              }
 
-      PrintFormat("ARMED tf=%s now=%d close=%d wait=%d sec candle=%s tradeId=%s", timeframe, now, candleCloseTime, (int)(candleCloseTime - now), candleTimeStr, tradeId);
+              if(dt.min >= 60) { dt.min -= 60; dt.hour++; }
+              if(dt.hour >= 24) { dt.hour -= 24; dt.day++; }
+              candleCloseTime = StructToTime(dt);
+              safety++;
+           }
+           while(candleCloseTime <= now && safety < 50);
+        }
+
+       datetime now = TimeCurrent();
+       PrintFormat("ARMED tf=%s now=%d close=%d wait=%d sec candle=%s tradeId=%s candleCloseStr=%s", timeframe, now, candleCloseTime, (int)(candleCloseTime - now), candleTimeStr, tradeId, candleCloseStr);
 
        currentState = STATE_ARMED;
        armedTime = TimeCurrent();
@@ -142,31 +158,29 @@ void OnTimer()
       Print("======================================");
    }
 
-    if(currentState == STATE_ARMED && candleCloseTime > 0)
-    {
-       datetime now = TimeCurrent();
-       datetime currentBarTime = iTime(_Symbol, _Period, 0);
+     if(currentState == STATE_ARMED && candleCloseTime > 0)
+     {
+        datetime now = TimeCurrent();
+        datetime currentBarTime = iTime(_Symbol, _Period, 0);
+        bool barChanged = (currentBarTime != armedBarTime);
+        bool timeReached = (now >= candleCloseTime);
 
-        if(currentBarTime != armedBarTime)
+        PrintFormat("CHECK tradeId=%s state=%d barChanged=%s timeReached=%s currentBarTime=%d armedBarTime=%d now=%d close=%d", trackedTradeId, currentState, barChanged ? "Y" : "N", timeReached ? "Y" : "N", currentBarTime, armedBarTime, now, candleCloseTime);
+
+        if(barChanged || timeReached)
         {
-           Print("New candle detected! Executing trade...");
+           Print("EXECUTE: firing ExecuteTrade()");
            currentState = STATE_EXECUTED;
            ExecuteTrade();
         }
-        else if(now >= candleCloseTime)
+        else
         {
+           int remaining = (int)(candleCloseTime - now);
            Comment("ARMED ", pendingDirection, "\n",
                    "Candle: ", ExtractJsonValue(response, "candle_time"), "\n",
-                   "Waiting for new candle...");
+                   "Closes in: ", remaining, " seconds");
         }
-       else
-       {
-          int remaining = (int)(candleCloseTime - now);
-          Comment("ARMED ", pendingDirection, "\n",
-                  "Candle: ", ExtractJsonValue(response, "candle_time"), "\n",
-                  "Closes in: ", remaining, " seconds");
-       }
-    }
+     }
 }
 
 void ExecuteTrade()
@@ -206,14 +220,11 @@ void ExecuteTrade()
        return;
     }
 
-    Print("Execution response: ", response);
+     Print("Execution response: ", response);
 
-   if(StringFind(response, "\"status\":\"executed\"") >= 0)
-   {
-      Print("======================================");
-      Print("TRADE EXECUTED");
-      Print("Response: ", response);
-      Print("======================================");
+    if(StringFind(response, "\"status\":\"executed\"") >= 0)
+    {
+       Print("EXECUTE_SUCCESS");
 
       currentState = STATE_EXECUTED;
       Comment("EXECUTED\nCheck dashboard for details");
@@ -232,9 +243,14 @@ void ExecuteTrade()
     {
        string errorCode = ExtractJsonValue(response, "retcode");
        string errorComment = ExtractJsonValue(response, "comment");
+       if(errorCode == "" && errorComment == "")
+       {
+          errorCode = ExtractJsonValue(response, "error");
+          errorComment = "";
+       }
 
        Print("ERROR: Execution failed. Code: ", errorCode, " Comment: ", errorComment);
-      currentState = STATE_ERROR;
+       currentState = STATE_ERROR;
        Comment("FAILED\n", errorComment);
        Sleep(5000);
        currentState = STATE_IDLE;
@@ -345,7 +361,7 @@ bool SendGetRequest(string url, string &response)
     Print("Response   : ", response);
     Print("==============================");
 
-    return false;
+    return true;
 }
 
 string UrlEncode(string value)
