@@ -328,7 +328,19 @@ def get_current_price(symbol):
 
 
 def get_latest_candle(symbol):
-    return None
+    market = ea_state.get("market", {}).get(symbol, {})
+    bid = market.get("bid")
+    ask = market.get("ask")
+    if bid is None or ask is None:
+        return None
+    now = datetime.now()
+    return {
+        "time": now,
+        "open": (bid + ask) / 2,
+        "high": max(bid, ask),
+        "low": min(bid, ask),
+        "close": (bid + ask) / 2,
+    }
 
 
 def close_position(ticket):
@@ -815,10 +827,7 @@ def api_settings():
 @app.route("/api/candle_data")
 def api_candle_data():
     current = _current_symbol()
-    candle = None
-
-    if is_connected():
-        candle = get_latest_candle(current)
+    candle = get_latest_candle(current)
 
     if not candle:
         return jsonify({"error": "No candle data"})
