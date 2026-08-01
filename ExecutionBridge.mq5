@@ -2,7 +2,7 @@
 //|                     ExecutionBridge.mq5                          |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "2.01"
+#property version   "3.00"
 #property strict
 
 input string FlaskURL   = "http://127.0.0.1:5000";  // CHANGE THIS to your VPS IP or domain when deploying
@@ -25,15 +25,9 @@ string Trim(string value);
 
 int OnInit()
 {
-<<<<<<< HEAD
-    Print("Execution Bridge Started - NEW TIMING v2");
-    EventSetTimer(1);
-    return(INIT_SUCCEEDED);
-=======
-   Print("Execution Bridge Started - NEW TIMING v2");
+   Print("Execution Bridge Started - VPS Reporting v3");
    EventSetTimer(1);
    return(INIT_SUCCEEDED);
->>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 }
 
 void OnDeinit(const int reason)
@@ -45,13 +39,13 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
    if(currentState != STATE_IDLE && currentState != STATE_ARMED)
+   {
+      ReportPosition();
+      ReportAccount();
       return;
+   }
 
-<<<<<<< HEAD
-    string url = FlaskURL + "/api/ea/pending?symbol=" + _Symbol + "&trade_id=" + UrlEncode(trackedTradeId);
-=======
    string url = FlaskURL + "/api/ea/pending?symbol=" + _Symbol + "&trade_id=" + UrlEncode(trackedTradeId);
->>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
    string response;
    bool ok = SendGetRequest(url, response);
 
@@ -65,14 +59,14 @@ void OnTimer()
       pendingTradeId = "";
       pendingDirection = "";
       trackedTradeId = "";
-       candleCloseTime = 0;
-       armedTime = 0;
-       armedBarTime = 0;
-       Comment("");
-       return;
-    }
+      candleCloseTime = 0;
+      armedTime = 0;
+      armedBarTime = 0;
+      Comment("");
+      return;
+   }
 
-    string tradeId = Trim(ExtractJsonValue(response, "trade_id"));
+   string tradeId = Trim(ExtractJsonValue(response, "trade_id"));
    string status = Trim(ExtractJsonValue(response, "status"));
 
    if(tradeId == "" || status == "")
@@ -88,87 +82,6 @@ void OnTimer()
       pendingTradeId = tradeId;
       pendingDirection = direction;
 
-<<<<<<< HEAD
-       int tf_minutes = 15;
-       if(timeframe == "M1") tf_minutes = 1;
-       else if(timeframe == "M5") tf_minutes = 5;
-       else if(timeframe == "M15") tf_minutes = 15;
-       else if(timeframe == "M30") tf_minutes = 30;
-       else if(timeframe == "H1") tf_minutes = 60;
-       else if(timeframe == "H4") tf_minutes = 240;
-       else if(timeframe == "D1") tf_minutes = 1440;
-
-         string candleCloseStr = Trim(ExtractJsonValue(response, "candle_close_unix"));
-         string digitsOnly = "";
-         for(int i = 0; i < StringLen(candleCloseStr); i++)
-         {
-            ushort ch = StringGetCharacter(candleCloseStr, i);
-            if(ch >= '0' && ch <= '9')
-               digitsOnly += StringSubstr(candleCloseStr, i, 1);
-         }
-         candleCloseTime = 0;
-         if(digitsOnly != "")
-            candleCloseTime = (datetime)StringToInteger(digitsOnly);
-
-         if(candleCloseTime <= 0)
-         {
-            datetime now = TimeCurrent();
-            MqlDateTime dt;
-            TimeToStruct(now, dt);
-            dt.sec = 0;
-
-            int safety = 0;
-            do
-            {
-               if(tf_minutes < 60)
-               {
-                  int remainder = dt.min % tf_minutes;
-                  if(remainder == 0)
-                     dt.min += tf_minutes;
-                  else
-                     dt.min = ((dt.min / tf_minutes) + 1) * tf_minutes;
-               }
-               else if(tf_minutes >= 1440)
-               {
-                  dt.hour = 0;
-                  dt.min = 0;
-                  dt.day++;
-               }
-               else
-               {
-                  int tf_hours = tf_minutes / 60;
-                  int remainder = dt.hour % tf_hours;
-                  if(remainder == 0 && dt.min == 0)
-                     dt.hour += tf_hours;
-                  else
-                     dt.hour = ((dt.hour / tf_hours) + 1) * tf_hours;
-                  dt.min = 0;
-               }
-
-               if(dt.min >= 60) { dt.min -= 60; dt.hour++; }
-               if(dt.hour >= 24) { dt.hour -= 24; dt.day++; }
-               candleCloseTime = StructToTime(dt);
-               safety++;
-            }
-            while(candleCloseTime <= now && safety < 50);
-         }
-
-         datetime now = TimeCurrent();
-         PrintFormat("ARMED tf=%s now=%d close=%d wait=%d sec candle=%s tradeId=%s candleCloseStr=%s", timeframe, now, candleCloseTime, (int)(candleCloseTime - now), candleTimeStr, tradeId, candleCloseStr);
-
-         currentState = STATE_ARMED;
-         armedTime = TimeCurrent();
-         armedBarTime = iTime(_Symbol, _Period, 0);
-
-       Print("======================================");
-       Print("TRADE ARMED");
-       Print("Direction: ", direction);
-       Print("Trade ID: ", tradeId);
-       Print("Candle: ", candleTimeStr);
-       Print("Waiting for candle close...");
-       Print("======================================");
-    }
-=======
       int tf_minutes = 15;
       if(timeframe == "M1") tf_minutes = 1;
       else if(timeframe == "M5") tf_minutes = 5;
@@ -178,67 +91,67 @@ void OnTimer()
       else if(timeframe == "H4") tf_minutes = 240;
       else if(timeframe == "D1") tf_minutes = 1440;
 
-        string candleCloseStr = Trim(ExtractJsonValue(response, "candle_close_unix"));
-        string digitsOnly = "";
-        for(int i = 0; i < StringLen(candleCloseStr); i++)
-        {
-           ushort ch = StringGetCharacter(candleCloseStr, i);
-           if(ch >= '0' && ch <= '9')
-              digitsOnly += StringSubstr(candleCloseStr, i, 1);
-        }
-        candleCloseTime = 0;
-        if(digitsOnly != "")
-           candleCloseTime = (datetime)StringToInteger(digitsOnly);
+      string candleCloseStr = Trim(ExtractJsonValue(response, "candle_close_unix"));
+      string digitsOnly = "";
+      for(int i = 0; i < StringLen(candleCloseStr); i++)
+      {
+         ushort ch = StringGetCharacter(candleCloseStr, i);
+         if(ch >= '0' && ch <= '9')
+            digitsOnly += StringSubstr(candleCloseStr, i, 1);
+      }
+      candleCloseTime = 0;
+      if(digitsOnly != "")
+         candleCloseTime = (datetime)StringToInteger(digitsOnly);
 
-        if(candleCloseTime <= 0)
-        {
-           datetime now = TimeCurrent();
-           MqlDateTime dt;
-           TimeToStruct(now, dt);
-           dt.sec = 0;
+      if(candleCloseTime <= 0)
+      {
+         datetime now = TimeCurrent();
+         MqlDateTime dt;
+         TimeToStruct(now, dt);
+         dt.sec = 0;
 
-           int safety = 0;
-           do
-           {
-              if(tf_minutes < 60)
-              {
-                 int remainder = dt.min % tf_minutes;
-                 if(remainder == 0)
-                    dt.min += tf_minutes;
-                 else
-                    dt.min = ((dt.min / tf_minutes) + 1) * tf_minutes;
-              }
-              else if(tf_minutes >= 1440)
-              {
-                 dt.hour = 0;
-                 dt.min = 0;
-                 dt.day++;
-              }
-              else
-              {
-                 int tf_hours = tf_minutes / 60;
-                 int remainder = dt.hour % tf_hours;
-                 if(remainder == 0 && dt.min == 0)
-                    dt.hour += tf_hours;
-                 else
-                    dt.hour = ((dt.hour / tf_hours) + 1) * tf_hours;
-                 dt.min = 0;
-              }
+         int safety = 0;
+         do
+         {
+            if(tf_minutes < 60)
+            {
+               int remainder = dt.min % tf_minutes;
+               if(remainder == 0)
+                  dt.min += tf_minutes;
+               else
+                  dt.min = ((dt.min / tf_minutes) + 1) * tf_minutes;
+            }
+            else if(tf_minutes >= 1440)
+            {
+               dt.hour = 0;
+               dt.min = 0;
+               dt.day++;
+            }
+            else
+            {
+               int tf_hours = tf_minutes / 60;
+               int remainder = dt.hour % tf_hours;
+               if(remainder == 0 && dt.min == 0)
+                  dt.hour += tf_hours;
+               else
+                  dt.hour = ((dt.hour / tf_hours) + 1) * tf_hours;
+               dt.min = 0;
+            }
 
-              if(dt.min >= 60) { dt.min -= 60; dt.hour++; }
-              if(dt.hour >= 24) { dt.hour -= 24; dt.day++; }
-              candleCloseTime = StructToTime(dt);
-              safety++;
-           }
-           while(candleCloseTime <= now && safety < 50);
-        }
+            if(dt.min >= 60) { dt.min -= 60; dt.hour++; }
+            if(dt.hour >= 24) { dt.hour -= 24; dt.day++; }
+            candleCloseTime = StructToTime(dt);
+            safety++;
+         }
+         while(candleCloseTime <= now && safety < 50);
+      }
 
-       datetime now = TimeCurrent();
-       PrintFormat("ARMED tf=%s now=%d close=%d wait=%d sec candle=%s tradeId=%s candleCloseStr=%s", timeframe, now, candleCloseTime, (int)(candleCloseTime - now), candleTimeStr, tradeId, candleCloseStr);
+      datetime now = TimeCurrent();
+      PrintFormat("ARMED tf=%s now=%d close=%d wait=%d sec candle=%s tradeId=%s candleCloseStr=%s", timeframe, now, candleCloseTime, (int)(candleCloseTime - now), candleTimeStr, tradeId, candleCloseStr);
 
-       currentState = STATE_ARMED;
-       armedTime = TimeCurrent();
-       armedBarTime = iTime(_Symbol, _Period, 0);
+      currentState = STATE_ARMED;
+      armedTime = TimeCurrent();
+      armedBarTime = iTime(_Symbol, _Period, 0);
 
       Print("======================================");
       Print("TRADE ARMED");
@@ -248,31 +161,30 @@ void OnTimer()
       Print("Waiting for candle close...");
       Print("======================================");
    }
->>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 
-     if(currentState == STATE_ARMED && candleCloseTime > 0)
-     {
-        datetime now = TimeCurrent();
-        datetime currentBarTime = iTime(_Symbol, _Period, 0);
-        bool barChanged = (currentBarTime != armedBarTime);
-        bool timeReached = (now >= candleCloseTime);
+   if(currentState == STATE_ARMED && candleCloseTime > 0)
+   {
+      datetime now = TimeCurrent();
+      datetime currentBarTime = iTime(_Symbol, _Period, 0);
+      bool barChanged = (currentBarTime != armedBarTime);
+      bool timeReached = (now >= candleCloseTime);
 
-        PrintFormat("CHECK tradeId=%s state=%d barChanged=%s timeReached=%s currentBarTime=%d armedBarTime=%d now=%d close=%d", trackedTradeId, currentState, barChanged ? "Y" : "N", timeReached ? "Y" : "N", currentBarTime, armedBarTime, now, candleCloseTime);
+      PrintFormat("CHECK tradeId=%s state=%d barChanged=%s timeReached=%s currentBarTime=%d armedBarTime=%d now=%d close=%d", trackedTradeId, currentState, barChanged ? "Y" : "N", timeReached ? "Y" : "N", currentBarTime, armedBarTime, now, candleCloseTime);
 
-        if(barChanged || timeReached)
-        {
-           Print("EXECUTE: firing ExecuteTrade()");
-           currentState = STATE_EXECUTED;
-           ExecuteTrade();
-        }
-        else
-        {
-           int remaining = (int)(candleCloseTime - now);
-           Comment("ARMED ", pendingDirection, "\n",
-                   "Candle: ", ExtractJsonValue(response, "candle_time"), "\n",
-                   "Closes in: ", remaining, " seconds");
-        }
-     }
+      if(barChanged || timeReached)
+      {
+         Print("EXECUTE: firing ExecuteTrade()");
+         currentState = STATE_EXECUTED;
+         ExecuteTrade();
+      }
+      else
+      {
+         int remaining = (int)(candleCloseTime - now);
+         Comment("ARMED ", pendingDirection, "\n",
+                 "Candle: ", ExtractJsonValue(response, "candle_time"), "\n",
+                 "Closes in: ", remaining, " seconds");
+      }
+   }
 }
 
 void ExecuteTrade()
@@ -295,22 +207,6 @@ void ExecuteTrade()
    string response;
    bool ok = SendGetRequest(url, response);
 
-<<<<<<< HEAD
-    if(!ok)
-    {
-       Print("ERROR: Failed to send execution request.");
-        currentState = STATE_ERROR;
-        Comment("FAILED\nConnection error");
-        Sleep(5000);
-        currentState = STATE_IDLE;
-        pendingTradeId = "";
-        pendingDirection = "";
-        trackedTradeId = "";
-        candleCloseTime = 0;
-        armedTime = 0;
-        armedBarTime = 0;
-        Comment("");
-=======
    if(!ok)
    {
        Print("ERROR: Failed to send execution request.");
@@ -325,16 +221,15 @@ void ExecuteTrade()
        armedTime = 0;
        armedBarTime = 0;
        Comment("");
->>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
        return;
-    }
+   }
 
-     Print("Execution response: ", response);
+   Print("Execution response: ", response);
 
     if(StringFind(response, "\"status\":\"executed\"") >= 0)
     {
        Print("EXECUTE_SUCCESS");
-<<<<<<< HEAD
+       ReportExecution(pendingTradeId, "executed", "0", "OK");
 
        currentState = STATE_EXECUTED;
        Comment("EXECUTED\nCheck dashboard for details");
@@ -348,36 +243,15 @@ void ExecuteTrade()
         armedTime = 0;
         armedBarTime = 0;
         Comment("");
-     }
-     else
-     {
-         string errorCode = ExtractJsonValue(response, "retcode");
-         string errorComment = ExtractJsonValue(response, "comment");
-         if(errorCode == "" && errorComment == "")
-         {
-            errorCode = ExtractJsonValue(response, "error");
-            errorComment = "";
-         }
+    }
+    else if(StringFind(response, "\"status\":\"queued\"") >= 0)
+    {
+       Print("EXECUTE_QUEUED");
+       ReportExecution(pendingTradeId, "queued", "0", "Queued");
+       currentState = STATE_EXECUTED;
+       Comment("QUEUED\nWaiting for broker fill");
 
-         Print("ERROR: Execution failed. Code: ", errorCode, " Comment: ", errorComment);
-         currentState = STATE_ERROR;
-         Comment("FAILED\n", errorComment);
-         Sleep(5000);
-         currentState = STATE_IDLE;
-         pendingTradeId = "";
-         pendingDirection = "";
-         trackedTradeId = "";
-         candleCloseTime = 0;
-         armedTime = 0;
-         armedBarTime = 0;
-         Comment("");
-     }
-=======
-
-      currentState = STATE_EXECUTED;
-      Comment("EXECUTED\nCheck dashboard for details");
-
-       Sleep(10000);
+       Sleep(5000);
        currentState = STATE_IDLE;
        pendingTradeId = "";
        pendingDirection = "";
@@ -398,6 +272,7 @@ void ExecuteTrade()
        }
 
        Print("ERROR: Execution failed. Code: ", errorCode, " Comment: ", errorComment);
+       ReportExecution(pendingTradeId, "error", errorCode, errorComment);
        currentState = STATE_ERROR;
        Comment("FAILED\n", errorComment);
        Sleep(5000);
@@ -410,12 +285,11 @@ void ExecuteTrade()
        armedBarTime = 0;
        Comment("");
     }
->>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 }
 
 bool SendPostRequest(string url, string jsonPayload, string &response)
 {
-    Print("Calling URL: ", url);
+    Print("POST: ", url);
     
     uchar postData[];
     StringToCharArray(jsonPayload, postData);
@@ -453,11 +327,6 @@ bool SendPostRequest(string url, string jsonPayload, string &response)
        return true;
     }
 
-<<<<<<< HEAD
-    Print("WebRequest POST failed. Code: ", res, " Response: ", response);
-    if(res == -1)
-       Print("Check MT5 Options -> Expert Advisors -> Allow WebRequest");
-=======
     int err = GetLastError();
     Print("==============================");
     Print("URL        : ", url);
@@ -465,14 +334,13 @@ bool SendPostRequest(string url, string jsonPayload, string &response)
     Print("MT5 Error  : ", err);
     Print("Response   : ", response);
     Print("==============================");
->>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 
-    return false;
+    return true;
 }
 
 bool SendGetRequest(string url, string &response)
 {
-    Print("Calling URL: ", url);
+    Print("GET: ", url);
     
     uchar empty_data[];
     uchar result[];
@@ -494,17 +362,6 @@ bool SendGetRequest(string url, string &response)
        ArrayResize(result, ArraySize(result) + 1);
        result[ArraySize(result) - 1] = 0;
     }
-<<<<<<< HEAD
-=======
-
-    int len = 0;
-    for(int i = 0; i < ArraySize(result); i++)
-    {
-       if(result[i] == 0) break;
-       len++;
-    }
-    response = CharArrayToString(result, 0, len);
->>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 
     int len = 0;
     for(int i = 0; i < ArraySize(result); i++)
@@ -514,18 +371,11 @@ bool SendGetRequest(string url, string &response)
     }
     response = CharArrayToString(result, 0, len);
 
-<<<<<<< HEAD
-     if(res == 200)
-     {
-        return true;
-     }
+    if(res == 200)
+    {
+       return true;
+    }
 
-     Print("WebRequest GET non-200. Code: ", res, " Response: ", response);
-     if(res == -1)
-        Print("Check MT5 Options -> Expert Advisors -> Allow WebRequest");
-
-     return true;
-=======
     int err = GetLastError();
     Print("==============================");
     Print("URL        : ", url);
@@ -535,7 +385,6 @@ bool SendGetRequest(string url, string &response)
     Print("==============================");
 
     return true;
->>>>>>> 6d74aabe6e62009c1cedd5ac1b87c2412dfbf761
 }
 
 string UrlEncode(string value)
@@ -570,9 +419,9 @@ string ExtractJsonValue(string json, string key)
    }
 
    string num = "";
-    while(pos < StringLen(json) &&
-          ((json[pos] >= '0' && json[pos] <= '9') ||
-           json[pos] == '.' || json[pos] == '-' || json[pos] == 'e' || json[pos] == 'E'))
+   while(pos < StringLen(json) &&
+         ((json[pos] >= '0' && json[pos] <= '9') ||
+          json[pos] == '.' || json[pos] == '-' || json[pos] == 'e' || json[pos] == 'E'))
    {
       num += json[pos];
       pos++;
@@ -590,4 +439,71 @@ string Trim(string value)
       end--;
    if(end < start) return "";
    return StringSubstr(value, start, end - start + 1);
+}
+
+void ReportExecution(string tradeId, string status, string retcode, string comment)
+{
+   if(tradeId == "") return;
+   
+   MqlTradeRequest request = {};
+   MqlTradeResult result = {};
+   
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double entry = (_Period == 0) ? ask : (pendingDirection == "BUY" ? ask : bid);
+   
+   string payload = StringFormat(
+      "{\"trade_id\":\"%s\",\"status\":\"%s\",\"ticket\":%d,\"deal\":%d,\"entry\":%.5f,\"slippage\":%.5f,\"retcode\":%s,\"comment\":\"%s\"}",
+      tradeId, status, (int)result.order, (int)result.deal, entry, 0.0, retcode, comment
+   );
+   
+   string response;
+   string url = FlaskURL + "/api/ea/report_execution";
+   SendPostRequest(url, payload, response);
+}
+
+void ReportPosition()
+{
+   if(trackedTradeId == "") return;
+   
+   MqlPositionCheck check = {};
+   if(PositionSelect(_Symbol))
+   {
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      double price = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl = PositionGetDouble(POSITION_SL);
+      double tp = PositionGetDouble(POSITION_TP);
+      double profit = PositionGetDouble(POSITION_PROFIT);
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      long type = PositionGetInteger(POSITION_TYPE);
+      string direction = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+      long ticket = PositionGetInteger(POSITION_TICKET);
+      
+      string payload = StringFormat(
+         "{\"ticket\":%d,\"symbol\":\"%s\",\"direction\":\"%s\",\"lot\":%.2f,\"entry\":%.5f,\"sl\":%.5f,\"tp\":%.5f,\"profit\":%.2f}",
+         (int)ticket, symbol, direction, volume, price, sl, tp, profit
+      );
+      
+      string response;
+      string url = FlaskURL + "/api/ea/report_position";
+      SendPostRequest(url, payload, response);
+   }
+}
+
+void ReportAccount()
+{
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double profit = AccountInfoDouble(ACCOUNT_PROFIT);
+   double margin = AccountInfoDouble(ACCOUNT_MARGIN);
+   double margin_level = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+   
+   string payload = StringFormat(
+      "{\"balance\":%.2f,\"equity\":%.2f,\"profit\":%.2f,\"margin\":%.2f,\"margin_level\":%.2f}",
+      balance, equity, profit, margin, margin_level
+   );
+   
+   string response;
+   string url = FlaskURL + "/api/ea/report_account";
+   SendPostRequest(url, payload, response);
 }
