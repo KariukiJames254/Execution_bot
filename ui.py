@@ -1,14 +1,9 @@
 import os
 import json
 import sqlite3
-import MetaTrader5 as mt5
 from flask import Flask, render_template, request, jsonify
 from datetime import datetime, timedelta
 from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP
-from broker import initialize, login, ensure_connected, shutdown as broker_shutdown, is_connected, get_account_details
-from market import get_current_price, get_latest_candle
-from execution import get_open_positions, close_position, set_break_even, execute_buy, execute_sell, validate_min_stop_distance
-from risk import calculate_lot_from_risk, calculate_sl, calculate_tp
 from logger import setup_logger
 from notifications import notify
 

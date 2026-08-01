@@ -423,7 +423,7 @@ string ExtractJsonValue(string json, string key)
          ((json[pos] >= '0' && json[pos] <= '9') ||
           json[pos] == '.' || json[pos] == '-' || json[pos] == 'e' || json[pos] == 'E'))
    {
-      num += json[pos];
+      num += ShortToString(json[pos]);
       pos++;
    }
    return num;
@@ -466,7 +466,6 @@ void ReportPosition()
 {
    if(trackedTradeId == "") return;
    
-   MqlPositionCheck check = {};
    if(PositionSelect(_Symbol))
    {
       double volume = PositionGetDouble(POSITION_VOLUME);
