@@ -295,6 +295,10 @@ def _ea_connected():
         return False
 
 
+def is_connected():
+    return _ea_connected()
+
+
 def _get_risk_amount(data, symbol):
     risk_mode = data.get("risk_mode", "amt")
     risk_amount = float(data.get("risk_amount", DEFAULT_RISK_AMOUNT))
@@ -303,6 +307,55 @@ def _get_risk_amount(data, symbol):
         if acct:
             risk_amount = float(acct.get("balance", 0)) * (risk_amount / 100.0)
     return risk_amount
+
+
+def get_account_details():
+    conn = _get_db()
+    try:
+        row = conn.execute("SELECT * FROM account_info ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_current_price(symbol):
+    return None, None
+
+
+def get_latest_candle(symbol):
+    return None
+
+
+def close_position(ticket):
+    return None
+
+
+def set_break_even(ticket, sl=None):
+    return None
+
+
+def execute_buy(*args, **kwargs):
+    return None
+
+
+def execute_sell(*args, **kwargs):
+    return None
+
+
+def validate_min_stop_distance(*args, **kwargs):
+    return True
+
+
+def calculate_lot_from_risk(*args, **kwargs):
+    return 0.01
+
+
+def calculate_sl(*args, **kwargs):
+    return 0
+
+
+def calculate_tp(*args, **kwargs):
+    return 0
 
 
 def _time_to_close(candle_time_str, timeframe):
