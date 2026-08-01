@@ -22,6 +22,7 @@ bool SendPostRequest(string url, string jsonPayload, string &response);
 bool SendGetRequest(string url, string &response);
 string ExtractJsonValue(string json, string key);
 string Trim(string value);
+void ReportMarket();
 
 int OnInit()
 {
@@ -38,6 +39,8 @@ void OnDeinit(const int reason)
 
 void OnTimer()
 {
+   ReportMarket();
+
    static datetime lastAccountReport = 0;
    if(TimeCurrent() - lastAccountReport >= 30)
    {
@@ -510,5 +513,20 @@ void ReportAccount()
    
    string response;
    string url = FlaskURL + "/api/ea/report_account";
+    SendPostRequest(url, payload, response);
+}
+
+void ReportMarket()
+{
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol, tick) || tick.bid <= 0 || tick.ask <= 0)
+      return;
+
+   string payload = StringFormat(
+      "{\"symbol\":\"%s\",\"bid\":%.5f,\"ask\":%.5f}",
+      _Symbol, tick.bid, tick.ask
+   );
+   string response;
+   string url = FlaskURL + "/api/ea/report_market";
    SendPostRequest(url, payload, response);
 }

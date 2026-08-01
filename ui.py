@@ -40,6 +40,7 @@ trade_history = []
 ea_state = {
     "account": {},
     "positions": {},
+    "market": {},
     "last_seen": None,
 }
 TRADE_HISTORY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.db")
@@ -328,7 +329,9 @@ def dashboard():
     connected = _ea_connected()
     account = ea_state.get("account") or None
     current = SYMBOL
-    bid = ask = None
+    market = ea_state["market"].get(current, {})
+    bid = market.get("bid")
+    ask = market.get("ask")
     broker_name = account.get("server") if account else None
     if not broker_name:
         broker_name = "MT5 Expert Advisor" if connected else "---"
@@ -382,7 +385,9 @@ def api_status():
     current = _current_symbol()
     connected = _ea_connected()
     account = ea_state.get("account") or None
-    bid = ask = None
+    market = ea_state["market"].get(current, {})
+    bid = market.get("bid")
+    ask = market.get("ask")
     
     trade_id = request.args.get("trade_id")
     pending = pending_trades.get(trade_id) if trade_id else None
@@ -693,6 +698,22 @@ def api_ea_report_position():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/ea/report_market", methods=["POST"])
+def api_ea_report_market():
+    data = request.get_json(silent=True) or {}
+    symbol = data.get("symbol")
+    try:
+        bid = float(data["bid"])
+        ask = float(data["ask"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "Market report requires symbol, bid, and ask"}), 400
+    if not symbol or bid <= 0 or ask <= 0:
+        return jsonify({"error": "Invalid market report"}), 400
+    ea_state["market"][symbol] = {"bid": bid, "ask": ask, "updated_at": datetime.now().isoformat()}
+    ea_state["last_seen"] = datetime.now().isoformat()
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/ea/report_execution", methods=["POST"])
 def api_ea_report_execution():
     data = request.get_json(silent=True) or {}
@@ -754,7 +775,9 @@ def api_candle_data():
 @app.route("/api/price")
 def api_price():
     current = _current_symbol()
-    bid, ask = get_current_price(current)
+    market = ea_state["market"].get(current, {})
+    bid = market.get("bid")
+    ask = market.get("ask")
     return jsonify({"bid": bid, "ask": ask})
 
 
