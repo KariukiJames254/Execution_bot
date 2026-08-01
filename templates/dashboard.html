@@ -647,7 +647,10 @@ function loadHistory() {
 }
 
 function isConnected() {
-  return document.getElementById('conn_status') && document.getElementById('conn_status').innerHTML.indexOf('Connected') !== -1;
+  var el = document.getElementById('conn_status');
+  if (!el) return false;
+  var text = (el.textContent || el.innerText || '').toLowerCase();
+  return text.indexOf('connected') !== -1;
 }
 
 function reconnectMT5() {
