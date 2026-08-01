@@ -456,8 +456,10 @@ def api_status():
     
     return jsonify({
         "connected": connected,
-        "balance": account["balance"] if account else None,
-        "equity": account["equity"] if account else None,
+        "login": account.get("login") if account else None,
+        "balance": account.get("balance") if account else None,
+        "equity": account.get("equity") if account else None,
+        "broker": account.get("server") if account else None,
         "bid": bid,
         "ask": ask,
         "symbol": current,
