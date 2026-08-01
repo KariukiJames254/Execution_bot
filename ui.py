@@ -241,6 +241,16 @@ def _current_symbol():
     return request.headers.get("X-Symbol") or request.args.get("symbol") or SYMBOL
 
 
+def _ea_connected():
+    last_seen = ea_state.get("last_seen")
+    if not last_seen:
+        return False
+    try:
+        return (datetime.now() - datetime.fromisoformat(last_seen)).total_seconds() < 90
+    except (TypeError, ValueError):
+        return False
+
+
 def _get_risk_amount(data, symbol):
     risk_mode = data.get("risk_mode", "amt")
     risk_amount = float(data.get("risk_amount", DEFAULT_RISK_AMOUNT))
@@ -272,7 +282,7 @@ def _format_countdown(seconds):
 
 @app.route("/")
 def dashboard():
-    connected = ea_state["last_seen"] is not None
+    connected = _ea_connected()
     account = ea_state.get("account") or None
     current = SYMBOL
     bid = ask = None
@@ -325,7 +335,7 @@ def api_symbols():
 @app.route("/api/status")
 def api_status():
     current = _current_symbol()
-    connected = ea_state["last_seen"] is not None
+    connected = _ea_connected()
     account = ea_state.get("account") or None
     bid = ask = None
     
@@ -546,6 +556,7 @@ def api_stats():
 @app.route("/api/ea/pending", methods=["GET", "POST"])
 def api_ea_pending():
     symbol = _current_symbol()
+    ea_state["last_seen"] = datetime.now().isoformat()
     trade_id = request.args.get("trade_id")
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]
@@ -646,7 +657,7 @@ def api_ea_report_execution():
 
 @app.route("/api/reconnect", methods=["POST"])
 def api_reconnect():
-    connected = ea_state["last_seen"] is not None
+    connected = _ea_connected()
     account = ea_state.get("account") or None
     return jsonify({
         "connected": connected,

@@ -86,7 +86,7 @@ h2 { color: #8b949e; margin: 20px 0 10px; font-size: 13px; text-transform: upper
       {{ 'Connected' if connected else 'Disconnected' }}
     </div>
     {% if not connected %}
-    <button class="btn" style="background:#d29922;color:#0d1117;margin-top:10px;padding:8px 14px;font-size:12px;" onclick="reconnectMT5()">Reconnect MT5</button>
+    <div style="color:#d29922;margin-top:10px;font-size:12px;">Waiting for the MT5 Expert Advisor heartbeat.</div>
     {% endif %}
   </div>
   <div class="card">

@@ -38,6 +38,13 @@ void OnDeinit(const int reason)
 
 void OnTimer()
 {
+   static datetime lastAccountReport = 0;
+   if(TimeCurrent() - lastAccountReport >= 30)
+   {
+      ReportAccount();
+      lastAccountReport = TimeCurrent();
+   }
+
    if(currentState != STATE_IDLE && currentState != STATE_ARMED)
    {
       ReportPosition();
