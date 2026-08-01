@@ -1207,17 +1207,17 @@ def _api_execute_trade_impl():
 
     if not ensure_connected():
         print(f"EXECUTE_TRADE 400: Not connected")
-        return jsonify({"error": "Not connected"}), 400
+        return jsonify({"status": "error", "retcode": 0, "comment": "Not connected"}), 200
 
     bid, ask = get_current_price(symbol)
     if not bid or not ask:
         print(f"EXECUTE_TRADE 400: No market price bid={bid} ask={ask}")
-        return jsonify({"error": "Could not fetch market price"}), 400
+        return jsonify({"status": "error", "retcode": 0, "comment": "Could not fetch market price"}), 200
 
     info = mt5.symbol_info(symbol)
     if info is None:
         print(f"EXECUTE_TRADE 400: Symbol info unavailable")
-        return jsonify({"error": "Symbol info unavailable"}), 400
+        return jsonify({"status": "error", "retcode": 0, "comment": "Symbol info unavailable"}), 200
     digits = info.digits
     point = info.point
 
@@ -1225,20 +1225,20 @@ def _api_execute_trade_impl():
     candle_low = trade.get("candle_low")
     if candle_high is None or candle_low is None:
         print(f"EXECUTE_TRADE 400: Missing candle data high={candle_high} low={candle_low}")
-        return jsonify({"error": "Missing candle data for execution"}), 400
+        return jsonify({"status": "error", "retcode": 0, "comment": "Missing candle data for execution"}), 200
 
     if direction == "BUY":
         entry = ask
         sl = round(float(candle_low), digits)
         if entry <= sl:
             print(f"EXECUTE_TRADE 400: Price moved below candle low bid={bid} ask={ask} sl={sl}")
-            return jsonify({"error": "Price moved below candle low. Trade setup invalid."}), 400
+            return jsonify({"status": "error", "retcode": 0, "comment": "Price moved below candle low. Trade setup invalid."}), 200
     else:
         entry = bid
         sl = round(float(candle_high), digits)
         if entry >= sl:
             print(f"EXECUTE_TRADE 400: Price moved above candle high bid={bid} ask={ask} sl={sl}")
-            return jsonify({"error": "Price moved above candle high. Trade setup invalid."}), 400
+            return jsonify({"status": "error", "retcode": 0, "comment": "Price moved above candle high. Trade setup invalid."}), 200
 
     if ENFORCE_MIN_STOP and MIN_STOP_BUFFER_PIPS > 0:
         min_sl_distance = MIN_STOP_BUFFER_PIPS * point * 10
@@ -1253,7 +1253,7 @@ def _api_execute_trade_impl():
     lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
     if lot <= 0:
         print(f"EXECUTE_TRADE 400: Invalid lot calculated lot={lot}")
-        return jsonify({"error": "Invalid lot size calculated"}), 400
+        return jsonify({"status": "error", "retcode": 0, "comment": "Invalid lot size calculated"}), 200
     if lot > info.volume_max:
         add_log("warn", f"Calculated lot {lot} exceeds broker max {info.volume_max}. Capping.")
         lot = info.volume_max
@@ -1267,17 +1267,17 @@ def _api_execute_trade_impl():
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
     if not validate_min_stop_distance(symbol, order_type, entry, sl, tp):
         print(f"EXECUTE_TRADE 400: Stop distance too small for broker sl={sl} tp={tp} entry={entry}")
-        return jsonify({"error": "Stop distance too small for broker requirements. Select a candle with a larger range."}), 400
+        return jsonify({"status": "error", "retcode": 0, "comment": "Stop distance too small for broker requirements. Select a candle with a larger range."}), 200
 
     positions = get_open_positions(symbol)
     if positions is None:
         print(f"EXECUTE_TRADE 400: Could not fetch positions")
-        return jsonify({"error": "Could not fetch positions"}), 400
+        return jsonify({"status": "error", "retcode": 0, "comment": "Could not fetch positions"}), 200
     if len(positions) >= MAX_OPEN_POSITIONS:
         print(f"EXECUTE_TRADE 400: Max positions reached {len(positions)}")
         pending_trades[trade_id]["status"] = "error"
         pending_trades[trade_id]["error"] = "Max positions reached"
-        return jsonify({"error": "Max positions reached"}), 400
+        return jsonify({"status": "error", "retcode": 0, "comment": "Max positions reached"}), 200
 
     trade["stages"] = [
         {"name": "Candle Selected", "done": True},
@@ -1369,7 +1369,7 @@ def _api_execute_trade_impl():
             "status": "error",
             "retcode": rc,
             "comment": comment,
-        }), 500
+        }), 200
 
 
 @app.route("/api/cancel_trade", methods=["POST"])
