@@ -498,16 +498,19 @@ void ReportPosition()
 
 void ReportAccount()
 {
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    long login = AccountInfoInteger(ACCOUNT_LOGIN);
+    string server = AccountInfoString(ACCOUNT_SERVER);
+    string company = AccountInfoString(ACCOUNT_COMPANY);
+    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double profit = AccountInfoDouble(ACCOUNT_PROFIT);
    double margin = AccountInfoDouble(ACCOUNT_MARGIN);
    double margin_level = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
    
-   string payload = StringFormat(
-      "{\"balance\":%.2f,\"equity\":%.2f,\"profit\":%.2f,\"margin\":%.2f,\"margin_level\":%.2f}",
-      balance, equity, profit, margin, margin_level
-   );
+    string payload = StringFormat(
+       "{\"login\":%d,\"server\":\"%s\",\"company\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"profit\":%.2f,\"margin\":%.2f,\"margin_level\":%.2f}",
+       (int)login, server, company, balance, equity, profit, margin, margin_level
+    );
    
    string response;
    string url = FlaskURL + "/api/ea/report_account";

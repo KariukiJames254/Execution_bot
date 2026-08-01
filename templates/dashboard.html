@@ -72,13 +72,89 @@ h2 { color: #8b949e; margin: 20px 0 10px; font-size: 13px; text-transform: upper
 .exec-result-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
 .exec-result-grid .card { text-align: center; }
 .exec-result-grid .card .value { font-size: 16px; }
+
+/* Responsive dashboard refresh */
+:root { --bg: #0b1018; --surface: #121a25; --surface-raised: #182231; --border: #283548; --text: #e6edf6; --muted: #91a1b7; --accent: #4f9cff; }
+body { min-width: 320px; padding: 0; background: radial-gradient(circle at top right, #172d4d 0, var(--bg) 34rem); color: var(--text); }
+.app-shell { width: min(100%, 1440px); margin: 0 auto; padding: 24px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 0 26px; }
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark { width: 38px; height: 38px; border-radius: 13px; display: grid; place-items: center; background: linear-gradient(135deg, #7cffb2, #2c9dff); box-shadow: 0 8px 26px rgba(51, 174, 148, .24); font-size: 18px; }
+.brand h1 { margin: 0; color: var(--text); font-size: clamp(24px, 4vw, 32px); letter-spacing: -.6px; }
+.brand small { display: block; color: var(--muted); margin-top: 2px; font-size: 12px; }
+.live-pill { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: rgba(18, 26, 37, .8); border-radius: 999px; padding: 9px 12px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.live-pill .status-dot { margin: 0; }
+h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25px; }
+.grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+.overview-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.card, .input-card { border-color: var(--border); border-radius: 12px; background: rgba(18, 26, 37, .92); }
+.card { padding: 16px; }
+.card:hover, .input-card:focus-within { border-color: #3e5270; }
+.card label, .input-card label { color: var(--muted); }
+.card .value { font-size: clamp(18px, 2.2vw, 23px); }
+#settings_grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.input-card { background: rgba(12, 19, 29, .78); min-width: 0; }
+.input-card input, .input-card select { min-height: 48px; font-size: 16px; border-radius: 8px; }
+.radio-group { min-height: 48px; gap: 8px; }
+.radio-group label { min-height: 48px; min-width: 54px; display: inline-flex; align-items: center; justify-content: center; }
+.btn { min-height: 44px; margin: 0; border-radius: 8px; }
+.btn-exec { min-height: 56px; padding: 14px 32px; box-shadow: 0 8px 18px rgba(0, 0, 0, .18); }
+#positions { display: grid; gap: 8px; }
+.position-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px; border: 1px solid #243143; border-radius: 9px; background: #0e1621; }
+.position-row strong { min-width: 42px; }
+#history_card { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.history-table { min-width: 720px; }
+.history-table th, .history-table td { white-space: nowrap; padding: 11px 10px; }
+.log-box { height: 220px; border-radius: 12px; }
+.calc-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+
+@media (max-width: 1050px) {
+  .overview-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #settings_grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .app-shell { padding: 16px; }
+  .topbar { padding-bottom: 16px; align-items: flex-start; }
+  .live-pill { padding: 8px 10px; }
+  .brand-mark { width: 34px; height: 34px; border-radius: 11px; }
+  .brand h1 { font-size: 24px; }
+  .brand small { display: none; }
+  h2 { margin-top: 25px; }
+  .overview-grid, #settings_grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .grid { gap: 10px; }
+  .card, .input-card { padding: 13px; border-radius: 10px; }
+  .card .value { font-size: 18px; }
+  .card label, .input-card label { font-size: 10px; }
+  #settings_grid .input-card:last-child { grid-column: span 2; }
+  .calc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .calc-grid .card { padding: 11px 8px; }
+  .form-row { gap: 10px; }
+  #ea_buttons { display: grid; grid-template-columns: 1fr 1fr; }
+  #ea_buttons .btn { width: 100%; padding: 12px 8px; font-size: 14px; }
+  .position-row { align-items: flex-start; font-size: 13px; }
+  .log-box { height: 190px; }
+}
+@media (max-width: 390px) {
+  .overview-grid, #settings_grid { grid-template-columns: 1fr; }
+  #settings_grid .input-card:last-child { grid-column: auto; }
+  .live-pill { font-size: 0; padding: 10px; }
+  .calc-grid { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
-<h1>&#x1F7E2; Execution Bot</h1>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">↗</div>
+      <div><h1>Execution Bot</h1><small>EA-powered trade execution</small></div>
+    </div>
+    <div class="live-pill"><span class="status-dot {{ 'status-connected' if connected else 'status-disconnected' }}"></span>EA status</div>
+  </header>
+  <main>
 
 <h2>Connection</h2>
-<div class="grid">
+<div class="grid overview-grid">
   <div class="card">
     <label>Status</label>
     <div class="value {{ 'green' if connected else 'red' }}" id="conn_status">
@@ -365,6 +441,9 @@ h2 { color: #8b949e; margin: 20px 0 10px; font-size: 13px; text-transform: upper
   {% for entry in log_entries %}
   <div class="log-entry {{ entry.level }}">{{ entry.time }} {{ entry.message }}</div>
   {% endfor %}
+</div>
+
+  </main>
 </div>
 
 <script>
@@ -673,8 +752,9 @@ function refreshData() {
       return; 
     }
     el.innerHTML = positions.map(function(p) {
-      return '<div style="padding:8px;border-bottom:1px solid #21262d;">' +
-        '<strong>' + (p.type == 0 ? 'BUY' : 'SELL') + '</strong> ' +
+      var direction = p.type === 0 || p.type === 'BUY' ? 'BUY' : 'SELL';
+      return '<div class="position-row">' +
+        '<strong style="color:' + (direction === 'BUY' ? '#3fb950' : '#f85149') + '">' + direction + '</strong>' +
         p.symbol + ' | Vol: ' + p.volume +
         ' | Entry: ' + p.price_open.toFixed(5) +
         ' | SL: ' + p.sl.toFixed(5) +

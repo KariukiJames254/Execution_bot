@@ -286,7 +286,9 @@ def dashboard():
     account = ea_state.get("account") or None
     current = SYMBOL
     bid = ask = None
-    broker_name = "MT5 Expert Advisor" if connected else "---"
+    broker_name = account.get("server") if account else None
+    if not broker_name:
+        broker_name = "MT5 Expert Advisor" if connected else "---"
     symbols_to_show = AVAILABLE_SYMBOLS
 
     trade_id = request.args.get("trade_id")
@@ -298,9 +300,9 @@ def dashboard():
     return render_template(
         "dashboard.html",
         connected=connected,
-        account_login=account["login"] if account else None,
-        account_balance=account["balance"] if account else None,
-        account_equity=account["equity"] if account else None,
+        account_login=account.get("login") if account else None,
+        account_balance=account.get("balance") if account else None,
+        account_equity=account.get("equity") if account else None,
         symbol=current,
         broker=broker_name,
         bid=bid,
