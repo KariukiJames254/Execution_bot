@@ -32,6 +32,11 @@ TF_SECONDS = {
 
 pending_trades = {}
 trade_history = []
+ea_state = {
+    "account": {},
+    "positions": {},
+    "last_seen": None,
+}
 TRADE_HISTORY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.db")
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json")
 EA_STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ea_state")
@@ -240,9 +245,9 @@ def _get_risk_amount(data, symbol):
     risk_mode = data.get("risk_mode", "amt")
     risk_amount = float(data.get("risk_amount", DEFAULT_RISK_AMOUNT))
     if risk_mode == "pct":
-        acct = get_account_details() if is_connected() else None
+        acct = ea_state.get("account")
         if acct:
-            risk_amount = acct["balance"] * (risk_amount / 100.0)
+            risk_amount = float(acct.get("balance", 0)) * (risk_amount / 100.0)
     return risk_amount
 
 
@@ -267,30 +272,12 @@ def _format_countdown(seconds):
 
 @app.route("/")
 def dashboard():
-    if not ensure_connected():
-        add_log("error", "Failed to connect to MT5 terminal")
-
-    connected = is_connected()
-    account = get_account_details() if connected else None
+    connected = ea_state["last_seen"] is not None
+    account = ea_state.get("account") or None
     current = SYMBOL
-    bid, ask = get_current_price(current) if connected else (None, None)
-    positions = get_open_positions(current) if connected else []
-    terminal = mt5.terminal_info() if connected else None
-    broker_name = terminal.name if terminal else "---"
-
+    bid = ask = None
+    broker_name = "MT5 Expert Advisor" if connected else "---"
     symbols_to_show = AVAILABLE_SYMBOLS
-    if connected:
-        try:
-            mt5_symbols = mt5.symbols_get()
-            if mt5_symbols:
-                names = sorted({s.name for s in mt5_symbols if s.visible})
-                curated = set(AVAILABLE_SYMBOLS)
-                popular = [s for s in names if any(s.endswith(suffix) for suffix in AVAILABLE_SYMBOLS)]
-                merged = curated.union(popular)
-                if merged:
-                    symbols_to_show = sorted(merged)
-        except Exception as e:
-            logger.warning(f"Failed to fetch MT5 symbols for dashboard: {e}")
 
     trade_id = request.args.get("trade_id")
     pending = pending_trades.get(trade_id) if trade_id else None
@@ -338,9 +325,9 @@ def api_symbols():
 @app.route("/api/status")
 def api_status():
     current = _current_symbol()
-    connected = is_connected()
-    account = get_account_details() if connected else None
-    bid, ask = get_current_price(current) if connected else (None, None)
+    connected = ea_state["last_seen"] is not None
+    account = ea_state.get("account") or None
+    bid = ask = None
     
     trade_id = request.args.get("trade_id")
     pending = pending_trades.get(trade_id) if trade_id else None
@@ -351,8 +338,8 @@ def api_status():
         countdown = _time_to_close(pending.get("candle_time", ""), pending.get("timeframe", TIMEFRAME))
         stages = pending.get("stages", [])
     
-    if connected:
-        open_positions = len(get_open_positions(current))
+    open_positions = sum(1 for position in ea_state["positions"].values()
+                         if position.get("symbol") == current)
     
     return jsonify({
         "connected": connected,
@@ -559,9 +546,6 @@ def api_stats():
 @app.route("/api/ea/pending", methods=["GET", "POST"])
 def api_ea_pending():
     symbol = _current_symbol()
-    if not is_connected():
-        return jsonify({"status": "error", "message": "Not connected"}), 200
-
     trade_id = request.args.get("trade_id")
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]
@@ -622,11 +606,48 @@ def api_ea_pending():
     return jsonify({"status": "idle"})
 
 
+@app.route("/api/ea/report_account", methods=["POST"])
+def api_ea_report_account():
+    data = request.get_json(silent=True) or {}
+    ea_state["account"] = data
+    ea_state["last_seen"] = datetime.now().isoformat()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ea/report_position", methods=["POST"])
+def api_ea_report_position():
+    data = request.get_json(silent=True) or {}
+    ticket = data.get("ticket")
+    if ticket is None:
+        return jsonify({"error": "Missing ticket"}), 400
+    ea_state["positions"][str(ticket)] = {
+        "ticket": ticket,
+        "type": data.get("direction", ""),
+        "symbol": data.get("symbol", ""),
+        "volume": data.get("lot", 0),
+        "price_open": data.get("entry", 0),
+        "sl": data.get("sl", 0),
+        "tp": data.get("tp", 0),
+        "profit": data.get("profit", 0),
+    }
+    ea_state["last_seen"] = datetime.now().isoformat()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ea/report_execution", methods=["POST"])
+def api_ea_report_execution():
+    data = request.get_json(silent=True) or {}
+    trade_id = data.get("trade_id")
+    if trade_id in pending_trades:
+        pending_trades[trade_id].update(data)
+    ea_state["last_seen"] = datetime.now().isoformat()
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/reconnect", methods=["POST"])
 def api_reconnect():
-    success = ensure_connected()
-    connected = is_connected()
-    account = get_account_details() if connected else None
+    connected = ea_state["last_seen"] is not None
+    account = ea_state.get("account") or None
     return jsonify({
         "connected": connected,
         "balance": account["balance"] if account else None,
@@ -686,24 +707,11 @@ def api_logs():
 @app.route("/api/positions")
 def api_positions():
     current = _current_symbol()
-    if not is_connected():
-        return jsonify({"positions": [], "total_profit": 0.0})
-    positions = get_open_positions(current)
-    total = sum(float(getattr(p, "profit", 0) or 0) for p in positions)
+    positions = [position for position in ea_state["positions"].values()
+                 if position.get("symbol") == current]
+    total = sum(float(position.get("profit", 0) or 0) for position in positions)
     return jsonify({
-        "positions": [
-            {
-                "ticket": p.ticket,
-                "type": p.type,
-                "symbol": p.symbol,
-                "volume": p.volume,
-                "price_open": p.price_open,
-                "sl": p.sl,
-                "tp": p.tp,
-                "profit": p.profit,
-            }
-            for p in positions
-        ],
+        "positions": positions,
         "total_profit": total,
     })
 
@@ -760,6 +768,9 @@ def api_close_position():
 
 @app.route("/api/monitor")
 def api_monitor():
+    # Position and account updates are supplied by the MT5 EA.
+    return jsonify({"status": "ok"})
+
     if not is_connected():
         return jsonify({"status": "ok"})
 
