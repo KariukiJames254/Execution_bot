@@ -54,13 +54,18 @@ RESPONSE_FILE = os.path.join(EA_STATE_DIR, "response.json")
 def require_dashboard_login():
     """Keep browser access private while allowing the MT5 EA API to report."""
     path = request.path
-    if path in ("/login", "/logout") or path.startswith("/api/ea/") or path == "/api/execute_trade":
+    if path in ("/login", "/logout", "/healthz") or path.startswith("/api/ea/") or path == "/api/execute_trade":
         return None
     if session.get("dashboard_authenticated"):
         return None
     if path.startswith("/api/"):
         return jsonify({"error": "Authentication required"}), 401
     return redirect(url_for("login", next=path))
+
+
+@app.route("/healthz")
+def healthz():
+    return jsonify({"status": "ok"})
 
 
 @app.route("/login", methods=["GET", "POST"])
