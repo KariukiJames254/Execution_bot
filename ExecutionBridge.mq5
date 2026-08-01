@@ -5,7 +5,7 @@
 #property version   "3.00"
 #property strict
 
-input string FlaskURL   = "http://127.0.0.1:5000";  // CHANGE THIS to your VPS IP or domain when deploying
+input string FlaskURL   = "http://102.203.116.146:5000";  // VPS UI API endpoint
 input bool   TEST_MODE  = false;
 
 enum TradeState { STATE_IDLE, STATE_ARMED, STATE_EXECUTED, STATE_CANCELLED, STATE_ERROR };
