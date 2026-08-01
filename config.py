@@ -38,5 +38,10 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 FLASK_HOST = os.environ.get("FLASK_HOST", "0.0.0.0")
 FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
 
+# Dashboard access is disabled until both credentials are set in the VPS .env.
+DASHBOARD_USERNAME = os.environ.get("DASHBOARD_USERNAME", "")
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+DASHBOARD_SECRET_KEY = os.environ.get("DASHBOARD_SECRET_KEY", "")
+
 MIN_STOP_BUFFER_PIPS = float(os.environ.get("MIN_STOP_BUFFER_PIPS", "1"))
 ENFORCE_MIN_STOP = os.environ.get("ENFORCE_MIN_STOP", "False").lower() == "true"

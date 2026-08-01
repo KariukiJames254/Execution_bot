@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in · Execution Bot</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 20px; color: #e6edf6; font-family: "Segoe UI", Arial, sans-serif; background: radial-gradient(circle at top right, #19345b 0, #0b1018 45rem); }
+  .login-card { width: min(100%, 420px); padding: 34px; border: 1px solid #2b3b51; border-radius: 18px; background: rgba(18, 26, 37, .96); box-shadow: 0 22px 55px rgba(0,0,0,.32); }
+  .mark { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 15px; color: #08111b; font-size: 23px; background: linear-gradient(135deg, #7cffb2, #2c9dff); }
+  h1 { margin: 20px 0 7px; font-size: 28px; letter-spacing: -.5px; }
+  p { margin: 0 0 26px; color: #91a1b7; line-height: 1.5; }
+  label { display: block; margin: 16px 0 7px; color: #aab8cb; font-size: 12px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase; }
+  input { width: 100%; min-height: 50px; padding: 12px 13px; border: 1px solid #324258; border-radius: 9px; background: #0d151f; color: #e6edf6; font: inherit; font-size: 16px; }
+  input:focus { outline: 3px solid rgba(79,156,255,.22); border-color: #4f9cff; }
+  button { width: 100%; min-height: 50px; margin-top: 24px; border: 0; border-radius: 9px; color: white; cursor: pointer; font: 700 16px inherit; background: linear-gradient(135deg, #238636, #2ca449); }
+  button:hover { filter: brightness(1.08); }
+  .error { margin-top: 18px; padding: 11px 12px; border: 1px solid #7e3037; border-radius: 8px; color: #ffb4b9; background: rgba(218,54,51,.12); font-size: 14px; }
+</style>
+</head>
+<body>
+  <main class="login-card">
+    <div class="mark">↗</div>
+    <h1>Execution Bot</h1>
+    <p>Sign in to access the trading dashboard.</p>
+    <form method="post" autocomplete="on">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label for="username">Email or username</label>
+      <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  </main>
+</body>
+</html>

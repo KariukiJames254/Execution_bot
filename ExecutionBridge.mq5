@@ -297,14 +297,19 @@ void ExecuteTrade()
 bool SendPostRequest(string url, string jsonPayload, string &response)
 {
     Print("POST: ", url);
-    
-    uchar postData[];
-    StringToCharArray(jsonPayload, postData);
+     
+     uchar postData[];
+     int postSize = StringToCharArray(jsonPayload, postData);
+     // WebRequest sends the full array; omit StringToCharArray's trailing NUL
+     // so Flask receives valid JSON rather than JSON followed by a NUL byte.
+     if(postSize > 0)
+        ArrayResize(postData, postSize - 1);
 
     uchar result[];
     string headers = "Content-Type: application/json\r\n";
     string headers_out;
 
+    ResetLastError();
     int res = WebRequest(
         "POST",
         url,
@@ -315,11 +320,7 @@ bool SendPostRequest(string url, string jsonPayload, string &response)
         headers_out
     );
 
-    if(ArraySize(result) > 0)
-    {
-       ArrayResize(result, ArraySize(result) + 1);
-       result[ArraySize(result) - 1] = 0;
-    }
+    int err = GetLastError();
 
     int len = 0;
     for(int i = 0; i < ArraySize(result); i++)
@@ -329,12 +330,11 @@ bool SendPostRequest(string url, string jsonPayload, string &response)
     }
     response = CharArrayToString(result, 0, len);
 
-    if(res == 200)
+    if(res >= 200 && res < 300)
     {
        return true;
     }
 
-    int err = GetLastError();
     Print("==============================");
     Print("URL        : ", url);
     Print("HTTP Result: ", res);
@@ -342,7 +342,7 @@ bool SendPostRequest(string url, string jsonPayload, string &response)
     Print("Response   : ", response);
     Print("==============================");
 
-    return true;
+    return false;
 }
 
 bool SendGetRequest(string url, string &response)
@@ -354,6 +354,7 @@ bool SendGetRequest(string url, string &response)
     string headers = "";
     string headers_out;
 
+    ResetLastError();
     int res = WebRequest(
        "GET",
        url,
@@ -364,11 +365,7 @@ bool SendGetRequest(string url, string &response)
        headers_out
     );
 
-    if(ArraySize(result) > 0)
-    {
-       ArrayResize(result, ArraySize(result) + 1);
-       result[ArraySize(result) - 1] = 0;
-    }
+    int err = GetLastError();
 
     int len = 0;
     for(int i = 0; i < ArraySize(result); i++)
@@ -378,12 +375,11 @@ bool SendGetRequest(string url, string &response)
     }
     response = CharArrayToString(result, 0, len);
 
-    if(res == 200)
+    if(res >= 200 && res < 300)
     {
        return true;
     }
 
-    int err = GetLastError();
     Print("==============================");
     Print("URL        : ", url);
     Print("HTTP Result: ", res);
@@ -391,7 +387,7 @@ bool SendGetRequest(string url, string &response)
     Print("Response   : ", response);
     Print("==============================");
 
-    return true;
+    return false;
 }
 
 string UrlEncode(string value)

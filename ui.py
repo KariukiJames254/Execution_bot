@@ -1,14 +1,19 @@
 import os
 import json
 import sqlite3
-from flask import Flask, render_template, request, jsonify
+import hmac
+import secrets
+from flask import Flask, render_template, request, jsonify, redirect, session, url_for
 from datetime import datetime, timedelta
-from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP
+from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, DASHBOARD_SECRET_KEY
 from logger import setup_logger
 from notifications import notify
 
 logger = setup_logger("ui")
 app = Flask(__name__, template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates"))
+app.config["SECRET_KEY"] = DASHBOARD_SECRET_KEY or secrets.token_urlsafe(32)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 bot_running = False
@@ -42,6 +47,44 @@ TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "t
 EA_STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ea_state")
 COMMAND_FILE = os.path.join(EA_STATE_DIR, "command.json")
 RESPONSE_FILE = os.path.join(EA_STATE_DIR, "response.json")
+
+
+@app.before_request
+def require_dashboard_login():
+    """Keep browser access private while allowing the MT5 EA API to report."""
+    path = request.path
+    if path in ("/login", "/logout") or path.startswith("/api/ea/") or path == "/api/execute_trade":
+        return None
+    if session.get("dashboard_authenticated"):
+        return None
+    if path.startswith("/api/"):
+        return jsonify({"error": "Authentication required"}), 401
+    return redirect(url_for("login", next=path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        configured = bool(DASHBOARD_USERNAME and DASHBOARD_PASSWORD)
+        valid = configured and hmac.compare_digest(username, DASHBOARD_USERNAME) and hmac.compare_digest(password, DASHBOARD_PASSWORD)
+        if valid:
+            session.clear()
+            session["dashboard_authenticated"] = True
+            target = request.form.get("next") or "/"
+            if not target.startswith("/") or target.startswith("//"):
+                target = "/"
+            return redirect(target)
+        error = "Dashboard credentials are not configured." if not configured else "Invalid username or password."
+    return render_template("login.html", error=error, next=request.args.get("next", ""))
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 def _ensure_ea_state_dir():
@@ -622,8 +665,11 @@ def api_ea_pending():
 @app.route("/api/ea/report_account", methods=["POST"])
 def api_ea_report_account():
     data = request.get_json(silent=True) or {}
+    if "balance" not in data or "equity" not in data:
+        return jsonify({"error": "Account report is missing balance or equity"}), 400
     ea_state["account"] = data
     ea_state["last_seen"] = datetime.now().isoformat()
+    add_log("info", "Received account report from MT5 EA")
     return jsonify({"status": "ok"})
 
 
