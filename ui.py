@@ -808,13 +808,14 @@ def api_settings():
 @app.route("/api/candle_data")
 def api_candle_data():
     current = _current_symbol()
-    if not is_connected():
-        return jsonify({"error": "Not connected"}), 400
-    
-    candle = get_latest_candle(current)
+    candle = None
+
+    if is_connected():
+        candle = get_latest_candle(current)
+
     if not candle:
-        return jsonify({"error": "No candle data"}), 400
-    
+        return jsonify({"error": "No candle data"})
+
     return jsonify({
         "symbol": current,
         "time": candle["time"].isoformat(),
