@@ -14,6 +14,11 @@ try:
 except Exception:
     mt5 = None
 
+try:
+    from execution import get_open_positions as _execution_get_open_positions
+except Exception:
+    _execution_get_open_positions = None
+
 logger = setup_logger("ui")
 app = Flask(__name__, template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates"))
 app.config["SECRET_KEY"] = DASHBOARD_SECRET_KEY or secrets.token_urlsafe(32)
@@ -311,6 +316,19 @@ def is_connected():
 
 def ensure_connected():
     return is_connected()
+
+
+def _get_open_positions_impl(symbol=None):
+    if _execution_get_open_positions is not None:
+        try:
+            return _execution_get_open_positions(symbol)
+        except Exception:
+            pass
+    return []
+
+
+def get_open_positions(symbol=None):
+    return _get_open_positions_impl(symbol)
 
 
 def _get_risk_amount(data, symbol):
@@ -1030,7 +1048,7 @@ def api_prepare_trade():
         if not ensure_connected():
             return jsonify({"error": "Not connected"}), 400
 
-        if len(get_open_positions(symbol)) >= MAX_OPEN_POSITIONS:
+        if len(_get_open_positions_impl(symbol)) >= MAX_OPEN_POSITIONS:
             return jsonify({"error": "Max positions reached"}), 400
 
         if direction == "BUY":
