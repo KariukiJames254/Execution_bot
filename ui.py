@@ -1091,9 +1091,10 @@ def api_prepare_trade():
         be_rr = float(data.get("be_rr", BE_RR))
 
         lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
-        if lot > info.volume_max:
-            add_log("warn", f"Calculated lot {lot} exceeds broker max {info.volume_max}. Capping.")
-            lot = info.volume_max
+        volume_max = getattr(info, "volume_max", None)
+        if volume_max is not None and lot > volume_max:
+            add_log("warn", f"Calculated lot {lot} exceeds broker max {volume_max}. Capping.")
+            lot = volume_max
 
         diff = abs(entry - sl)
         if direction == "BUY":
