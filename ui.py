@@ -9,6 +9,11 @@ from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE
 from logger import setup_logger
 from notifications import notify
 
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    mt5 = None
+
 logger = setup_logger("ui")
 app = Flask(__name__, template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates"))
 app.config["SECRET_KEY"] = DASHBOARD_SECRET_KEY or secrets.token_urlsafe(32)
@@ -1007,138 +1012,147 @@ def api_monitor():
 
 @app.route("/api/prepare_trade", methods=["POST"])
 def api_prepare_trade():
-    data = request.get_json()
-    symbol = data.get("symbol") or _current_symbol()
-    direction = data.get("direction", "BUY")
-    timeframe = data.get("timeframe", TIMEFRAME)
-    high = float(data.get("high", 0))
-    low = float(data.get("low", 0))
-    close = float(data.get("close", 0))
-    open_ = float(data.get("open", 0))
-    candle_time_str = data.get("time", "")
-    
-    if not ensure_connected():
-        return jsonify({"error": "Not connected"}), 400
+    try:
+        data = request.get_json(silent=True) or {}
+        symbol = data.get("symbol") or _current_symbol()
+        direction = data.get("direction", "BUY")
+        timeframe = data.get("timeframe", TIMEFRAME)
+        high = float(data.get("high", 0))
+        low = float(data.get("low", 0))
+        close = float(data.get("close", 0))
+        open_ = float(data.get("open", 0))
+        candle_time_str = data.get("time", "")
 
-    if len(get_open_positions(symbol)) >= MAX_OPEN_POSITIONS:
-        return jsonify({"error": "Max positions reached"}), 400
+        if not ensure_connected():
+            return jsonify({"error": "Not connected"}), 400
 
-    if direction == "BUY":
-        sl = low
-        entry = close
-    else:
-        sl = high
-        entry = close
+        if len(get_open_positions(symbol)) >= MAX_OPEN_POSITIONS:
+            return jsonify({"error": "Max positions reached"}), 400
 
-    if sl == 0 or entry == 0:
-        return jsonify({"error": "Invalid candle data"}), 400
+        if direction == "BUY":
+            sl = low
+            entry = close
+        else:
+            sl = high
+            entry = close
 
-    info = mt5.symbol_info(symbol)
-    if info is None:
-        return jsonify({"error": "Symbol info unavailable"}), 400
-    digits = info.digits
-    point = info.point
+        if sl == 0 or entry == 0:
+            return jsonify({"error": "Invalid candle data"}), 400
 
-    entry = round(entry, digits)
-    sl = round(sl, digits)
+        info = mt5.symbol_info(symbol) if mt5 is not None else None
+        if info is None:
+            digits = 5
+            point = 0.00001
+        else:
+            digits = getattr(info, "digits", 5)
+            point = getattr(info, "point", 0.00001)
 
-    if direction == "BUY" and entry <= sl:
-        return jsonify({"error": "Candle close is at or below candle low. Cannot place BUY with SL at low."}), 400
-    if direction == "SELL" and entry >= sl:
-        return jsonify({"error": "Candle close is at or above candle high. Cannot place SELL with SL at high."}), 400
+        entry = round(entry, digits)
+        sl = round(sl, digits)
 
-    if ENFORCE_MIN_STOP and MIN_STOP_BUFFER_PIPS > 0:
-        min_sl_distance = MIN_STOP_BUFFER_PIPS * point * 10
-        actual_distance = abs(entry - sl)
-        if actual_distance < min_sl_distance:
-            error_msg = "Trade rejected.\n\nReason:\nThe selected candle results in a stop distance of only %.1f pips.\n\nMinimum allowed: %.1f pips.\n\nPlease select a candle with a larger range." % (actual_distance / (point * 10), MIN_STOP_BUFFER_PIPS)
-            add_log("warn", error_msg.replace("\n", " "))
-            notify(f"❌ <b>Trade Rejected</b>\n{direction} {symbol}\n\nReason:\nStop too close to entry ({actual_distance / (point * 10):.1f} pips).\nMinimum allowed: {MIN_STOP_BUFFER_PIPS} pips.\n\nPlease select a candle with a larger range.")
-            return jsonify({"error": error_msg}), 400
+        if direction == "BUY" and entry <= sl:
+            return jsonify({"error": "Candle close is at or below candle low. Cannot place BUY with SL at low."}), 400
+        if direction == "SELL" and entry >= sl:
+            return jsonify({"error": "Candle close is at or above candle high. Cannot place SELL with SL at high."}), 400
 
-    risk_amount = _get_risk_amount(data, symbol)
-    rr_ratio = float(data.get("rr_ratio", RR_RATIO))
-    be_rr = float(data.get("be_rr", BE_RR))
-    
-    lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
-    if lot > info.volume_max:
-        add_log("warn", f"Calculated lot {lot} exceeds broker max {info.volume_max}. Capping.")
-        lot = info.volume_max
-    
-    diff = abs(entry - sl)
-    if direction == "BUY":
-        tp = entry + diff * rr_ratio
-    else:
-        tp = entry - diff * rr_ratio
-    
-    tp = round(tp, digits)
-    
-    dist_points = abs(entry - sl) / info.point if info else 0
-    dist_pips = dist_points / 10.0
-    
-    be_trigger = entry + diff * be_rr if direction == "BUY" else entry - diff * be_rr
-    
-    trade_id = f"{symbol}_{candle_time_str}_{direction}"
-    
-    stages = [
-        {"name": "Candle Selected", "done": True},
-        {"name": "Candle Data Received", "done": True},
-        {"name": "Stop Loss Calculated", "done": True},
-        {"name": "Lot Size Calculated", "done": True},
-        {"name": "Take Profit Calculated", "done": True},
-        {"name": "Waiting For Candle Close", "done": True},
-        {"name": "Executing Trade", "done": False},
-        {"name": "Trade Opened", "done": False},
-    ]
-    
-    pending_trades[trade_id] = {
-        "trade_id": trade_id,
-        "symbol": symbol,
-        "direction": direction,
-        "timeframe": timeframe,
-        "entry": entry,
-        "sl": sl,
-        "tp": tp,
-        "lot": lot,
-        "risk_amount": risk_amount,
-        "rr_ratio": rr_ratio,
-        "be_rr": be_rr,
-        "be_trigger": round(be_trigger, info.digits) if info else be_trigger,
-        "distance_pips": round(dist_pips, 2),
-        "candle_time": candle_time_str,
-        "candle_open": open_,
-        "candle_high": high,
-        "candle_low": low,
-        "candle_close": close,
-        "status": "armed",
-        "stages": stages,
-        "time_remaining": _time_to_close(candle_time_str, timeframe),
-    }
-    
-    add_log("info", f"Prepared {direction} {symbol}: entry={entry}, SL={sl}, TP={tp}, lot={lot}")
-    notify(f"🛡 <b>Trade Armed</b>\n{direction} {symbol}\nEntry: {entry}\nSL: {sl}\nTP: {tp}\nLot: {lot}\nRisk: {risk_amount}")
-    
-    return jsonify({
-        "trade_id": trade_id,
-        "symbol": symbol,
-        "direction": direction,
-        "entry": entry,
-        "sl": sl,
-        "tp": tp,
-        "lot": lot,
-        "risk_amount": risk_amount,
-        "distance_pips": round(dist_pips, 2),
-        "rr_ratio": rr_ratio,
-        "be_rr": be_rr,
-        "be_trigger": round(be_trigger, info.digits) if info else be_trigger,
-        "status": "armed",
-        "candle_time": candle_time_str,
-        "candle_open": open_,
-        "candle_high": high,
-        "candle_low": low,
-        "candle_close": close,
-        "stages": stages,
-    })
+        if ENFORCE_MIN_STOP and MIN_STOP_BUFFER_PIPS > 0:
+            min_sl_distance = MIN_STOP_BUFFER_PIPS * point * 10
+            actual_distance = abs(entry - sl)
+            if actual_distance < min_sl_distance:
+                error_msg = "Trade rejected.\n\nReason:\nThe selected candle results in a stop distance of only %.1f pips.\n\nMinimum allowed: %.1f pips.\n\nPlease select a candle with a larger range." % (actual_distance / (point * 10), MIN_STOP_BUFFER_PIPS)
+                add_log("warn", error_msg.replace("\n", " "))
+                notify(f"❌ <b>Trade Rejected</b>\n{direction} {symbol}\n\nReason:\nStop too close to entry ({actual_distance / (point * 10):.1f} pips).\nMinimum allowed: {MIN_STOP_BUFFER_PIPS} pips.\n\nPlease select a candle with a larger range.")
+                return jsonify({"error": error_msg}), 400
+
+        risk_amount = _get_risk_amount(data, symbol)
+        rr_ratio = float(data.get("rr_ratio", RR_RATIO))
+        be_rr = float(data.get("be_rr", BE_RR))
+
+        lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
+        if lot > info.volume_max:
+            add_log("warn", f"Calculated lot {lot} exceeds broker max {info.volume_max}. Capping.")
+            lot = info.volume_max
+
+        diff = abs(entry - sl)
+        if direction == "BUY":
+            tp = entry + diff * rr_ratio
+        else:
+            tp = entry - diff * rr_ratio
+
+        tp = round(tp, digits)
+
+        dist_points = abs(entry - sl) / info.point if info else 0
+        dist_pips = dist_points / 10.0
+
+        be_trigger = entry + diff * be_rr if direction == "BUY" else entry - diff * be_rr
+
+        trade_id = f"{symbol}_{candle_time_str}_{direction}"
+
+        stages = [
+            {"name": "Candle Selected", "done": True},
+            {"name": "Candle Data Received", "done": True},
+            {"name": "Stop Loss Calculated", "done": True},
+            {"name": "Lot Size Calculated", "done": True},
+            {"name": "Take Profit Calculated", "done": True},
+            {"name": "Waiting For Candle Close", "done": True},
+            {"name": "Executing Trade", "done": False},
+            {"name": "Trade Opened", "done": False},
+        ]
+
+        pending_trades[trade_id] = {
+            "trade_id": trade_id,
+            "symbol": symbol,
+            "direction": direction,
+            "timeframe": timeframe,
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "lot": lot,
+            "risk_amount": risk_amount,
+            "rr_ratio": rr_ratio,
+            "be_rr": be_rr,
+            "be_trigger": round(be_trigger, info.digits) if info else be_trigger,
+            "distance_pips": round(dist_pips, 2),
+            "candle_time": candle_time_str,
+            "candle_open": open_,
+            "candle_high": high,
+            "candle_low": low,
+            "candle_close": close,
+            "status": "armed",
+            "stages": stages,
+            "time_remaining": _time_to_close(candle_time_str, timeframe),
+        }
+
+        add_log("info", f"Prepared {direction} {symbol}: entry={entry}, SL={sl}, TP={tp}, lot={lot}")
+        notify(f"🛡 <b>Trade Armed</b>\n{direction} {symbol}\nEntry: {entry}\nSL: {sl}\nTP: {tp}\nLot: {lot}\nRisk: {risk_amount}")
+
+        return jsonify({
+            "trade_id": trade_id,
+            "symbol": symbol,
+            "direction": direction,
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "lot": lot,
+            "risk_amount": risk_amount,
+            "distance_pips": round(dist_pips, 2),
+            "rr_ratio": rr_ratio,
+            "be_rr": be_rr,
+            "be_trigger": round(be_trigger, info.digits) if info else be_trigger,
+            "status": "armed",
+            "candle_time": candle_time_str,
+            "candle_open": open_,
+            "candle_high": high,
+            "candle_low": low,
+            "candle_close": close,
+            "stages": stages,
+        })
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        logger.exception("Prepare trade failed")
+        add_log("error", f"Prepare trade failed: {e}\n{tb}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/execute_trade", methods=["GET", "POST"])
