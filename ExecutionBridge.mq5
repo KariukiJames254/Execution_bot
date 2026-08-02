@@ -23,6 +23,7 @@ bool SendGetRequest(string url, string &response);
 string ExtractJsonValue(string json, string key);
 string Trim(string value);
 void ReportMarket();
+void ReportSymbolInfo();
 
 int OnInit()
 {
@@ -40,6 +41,13 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
    ReportMarket();
+
+   static datetime lastSymbolInfoReport = 0;
+   if(TimeCurrent() - lastSymbolInfoReport >= 10)
+   {
+      ReportSymbolInfo();
+      lastSymbolInfoReport = TimeCurrent();
+   }
 
    static datetime lastAccountReport = 0;
    if(TimeCurrent() - lastAccountReport >= 30)
@@ -522,11 +530,42 @@ void ReportMarket()
    if(!SymbolInfoTick(_Symbol, tick) || tick.bid <= 0 || tick.ask <= 0)
       return;
 
+    string payload = StringFormat(
+       "{\"symbol\":\"%s\",\"bid\":%.5f,\"ask\":%.5f}",
+       _Symbol, tick.bid, tick.ask
+    );
+    string response;
+    string url = FlaskURL + "/api/ea/report_market";
+    SendPostRequest(url, payload, response);
+}
+
+void ReportSymbolInfo()
+{
+   string symbol = _Symbol;
+
+   long   digits       = SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   double point        = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double vol_min      = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double vol_max      = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double vol_step     = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   double tick_value   = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+   double stops_level  = (double)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   long   filling      = SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
+   long   visible      = SymbolInfoInteger(symbol, SYMBOL_VISIBLE);
+   long   trade_mode   = SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
+
    string payload = StringFormat(
-      "{\"symbol\":\"%s\",\"bid\":%.5f,\"ask\":%.5f}",
-      _Symbol, tick.bid, tick.ask
+      "{\"symbol\":\"%s\",\"digits\":%d,\"point\":%.8f,"
+      "\"volume_min\":%.2f,\"volume_max\":%.2f,\"volume_step\":%.4f,"
+      "\"trade_tick_value\":%.6f,\"trade_stops_level\":%.0f,"
+      "\"filling_mode\":%d,\"visible\":%d,\"trade_mode\":%d}",
+      symbol, (int)digits, point,
+      vol_min, vol_max, vol_step,
+      tick_value, stops_level,
+      (int)filling, (int)visible, (int)trade_mode
    );
+
    string response;
-   string url = FlaskURL + "/api/ea/report_market";
+   string url = FlaskURL + "/api/ea/report_symbol_info";
    SendPostRequest(url, payload, response);
 }

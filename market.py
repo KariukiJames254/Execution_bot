@@ -1,28 +1,35 @@
 import pandas as pd
-import MetaTrader5 as mt5
 from logger import setup_logger
 from config import TIMEFRAME
+from symbol_store import symbol_info, get_tick
+
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    mt5 = None
 
 logger = setup_logger("market")
 
 _TF_MAP = {
-    "M1": mt5.TIMEFRAME_M1, "M2": mt5.TIMEFRAME_M2, "M3": mt5.TIMEFRAME_M3,
-    "M4": mt5.TIMEFRAME_M4, "M5": mt5.TIMEFRAME_M5, "M6": mt5.TIMEFRAME_M6,
-    "M10": mt5.TIMEFRAME_M10, "M12": mt5.TIMEFRAME_M12, "M15": mt5.TIMEFRAME_M15,
-    "M20": mt5.TIMEFRAME_M20, "M30": mt5.TIMEFRAME_M30,
-    "H1": mt5.TIMEFRAME_H1, "H2": mt5.TIMEFRAME_H2, "H3": mt5.TIMEFRAME_H3,
-    "H4": mt5.TIMEFRAME_H4, "H6": mt5.TIMEFRAME_H6, "H8": mt5.TIMEFRAME_H8,
-    "H12": mt5.TIMEFRAME_H12,
-    "D1": mt5.TIMEFRAME_D1,
-    "W1": mt5.TIMEFRAME_W1,
-    "MN1": mt5.TIMEFRAME_MN1,
+    "M1": "TIMEFRAME_M1", "M2": "TIMEFRAME_M2", "M3": "TIMEFRAME_M3",
+    "M4": "TIMEFRAME_M4", "M5": "TIMEFRAME_M5", "M6": "TIMEFRAME_M6",
+    "M10": "TIMEFRAME_M10", "M12": "TIMEFRAME_M12", "M15": "TIMEFRAME_M15",
+    "M20": "TIMEFRAME_M20", "M30": "TIMEFRAME_M30",
+    "H1": "TIMEFRAME_H1", "H2": "TIMEFRAME_H2", "H3": "TIMEFRAME_H3",
+    "H4": "TIMEFRAME_H4", "H6": "TIMEFRAME_H6", "H8": "TIMEFRAME_H8",
+    "H12": "TIMEFRAME_H12",
+    "D1": "TIMEFRAME_D1",
+    "W1": "TIMEFRAME_W1",
+    "MN1": "TIMEFRAME_MN1",
 }
 
 
 def _resolve_timeframe(timeframe):
     if isinstance(timeframe, int):
         return timeframe
-    return _TF_MAP.get(str(timeframe).upper())
+    if mt5 is not None:
+        return getattr(mt5, _TF_MAP.get(str(timeframe).upper(), ""), None)
+    return None
 
 
 def _is_ipc_error(error):
@@ -36,7 +43,7 @@ def _safe_call(func, *args, on_ipc_reconnect=None, **kwargs):
     try:
         result = func(*args, **kwargs)
         if result is None:
-            error = mt5.last_error()
+            error = mt5.last_error() if mt5 is not None else None
             if _is_ipc_error(error):
                 logger.warning(f"IPC error detected: {error}")
                 from broker import ensure_connected
@@ -59,12 +66,15 @@ def _safe_call(func, *args, on_ipc_reconnect=None, **kwargs):
 
 
 def _ensure_symbol_selected(symbol):
-    info = _safe_call(mt5.symbol_info, symbol)
+    info = symbol_info(symbol)
+    if info is None and mt5 is not None:
+        info = _safe_call(mt5.symbol_info, symbol)
     if info is None:
         return False
-    if not info.visible:
+    if not getattr(info, "visible", True):
         logger.info(f"Selecting {symbol} in Market Watch")
-        _safe_call(mt5.symbol_select, symbol, True)
+        if mt5 is not None:
+            _safe_call(mt5.symbol_select, symbol, True)
     return True
 
 
@@ -113,10 +123,12 @@ def get_latest_candle(symbol, timeframe=None):
 
 
 def get_current_price(symbol):
-    tick = _safe_call(mt5.symbol_info_tick, symbol)
-    if tick is None:
-        return None, None
-    return tick.bid, tick.ask
+    bid, ask = get_tick(symbol)
+    if bid is None and ask is None and mt5 is not None:
+        tick = _safe_call(mt5.symbol_info_tick, symbol)
+        if tick is not None:
+            return tick.bid, tick.ask
+    return bid, ask
 
 
 def get_previous_candle(symbol, timeframe=None):
@@ -172,7 +184,7 @@ def get_candles(symbol, timeframe=None, count=100):
 
 
 def get_symbol_info(symbol):
-    info = _safe_call(mt5.symbol_info, symbol)
+    info = symbol_info(symbol)
     if info is None:
         logger.error(f"Symbol {symbol} not found")
         return None
