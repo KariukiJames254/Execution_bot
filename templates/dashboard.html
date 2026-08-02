@@ -522,87 +522,87 @@ function armTrade(direction) {
   }
 
   setButtonsDisabled(true);
-   console.log('armTrade buttons disabled, starting fetch');
+  console.log('armTrade buttons disabled, starting fetch');
 
-   var symbolRegistered = false;
-   var candleRetryCount = 0;
+  var candleRetryCount = 0;
 
-   function fetchCandleData() {
-     fetch('/api/candle_data', {
-       headers: { 'X-Symbol': symbol }
-     })
-     .then(function(r) { return r.json(); })
-     .then(function(data) {
-       console.log('candle_data response', data);
-       if (data.error && data.message && data.message.indexOf('not registered') >= 0) {
-         if (candleRetryCount < 5) {
-           candleRetryCount++;
-           setTimeout(fetchCandleData, 1000);
-           return;
-         }
-       }
-       if (data.error) {
-         updateStatus('Error: ' + data.error);
-         setButtonsDisabled(false);
-         return;
-       }
-
-       return fetch('/api/price', {
+  function fetchCandleData() {
+    fetch('/api/candle_data', {
       headers: { 'X-Symbol': symbol }
     })
     .then(function(r) { return r.json(); })
-    .then(function(priceData) {
-      console.log('price response', priceData);
-      if (!priceData.bid || !priceData.ask) {
-        updateStatus('Could not fetch market price.');
+    .then(function(data) {
+      console.log('candle_data response', data);
+      if (data.error && data.message && data.message.indexOf('not registered') >= 0) {
+        if (candleRetryCount < 5) {
+          candleRetryCount++;
+          setTimeout(fetchCandleData, 1000);
+          return;
+        }
+      }
+      if (data.error) {
+        updateStatus('Error: ' + data.error);
         setButtonsDisabled(false);
         return;
       }
 
-      var entry = direction === 'BUY' ? priceData.ask : priceData.bid;
-
-      return fetch('/api/prepare_trade', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Symbol': symbol
-        },
-        body: JSON.stringify({
-          symbol: symbol,
-          direction: direction,
-          timeframe: 'M15',
-          open: data.open,
-          high: data.high,
-          low: data.low,
-          close: data.close,
-          time: data.time,
-          risk_amount: riskAmt,
-          risk_mode: riskMode,
-          rr_ratio: rr,
-          be_rr: beRr,
-        })
+      return fetch('/api/price', {
+        headers: { 'X-Symbol': symbol }
       })
       .then(function(r) { return r.json(); })
-      .then(function(prepData) {
-        console.log('prepare_trade response', prepData);
-        if (prepData.error) {
-          updateStatus('Error: ' + prepData.error);
+      .then(function(priceData) {
+        console.log('price response', priceData);
+        if (!priceData.bid || !priceData.ask) {
+          updateStatus('Could not fetch market price.');
           setButtonsDisabled(false);
           return;
         }
-        pendingDirection = direction;
-       updateStatus(direction + ' trade armed. Waiting for candle close...');
-           window.location.href = '?trade_id=' + prepData.trade_id + '&symbol=' + encodeURIComponent(symbol);
-       });
-     });
-   })
-   .catch(function(err) {
-     console.error('armTrade chain failed', err);
-     updateStatus('Network error: ' + err.message);
-     setButtonsDisabled(false);
-   });
 
-   fetchCandleData();
+        var entry = direction === 'BUY' ? priceData.ask : priceData.bid;
+
+        return fetch('/api/prepare_trade', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Symbol': symbol
+          },
+          body: JSON.stringify({
+            symbol: symbol,
+            direction: direction,
+            timeframe: 'M15',
+            open: data.open,
+            high: data.high,
+            low: data.low,
+            close: data.close,
+            time: data.time,
+            risk_amount: riskAmt,
+            risk_mode: riskMode,
+            rr_ratio: rr,
+            be_rr: beRr,
+          })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(prepData) {
+          console.log('prepare_trade response', prepData);
+          if (prepData.error) {
+            updateStatus('Error: ' + prepData.error);
+            setButtonsDisabled(false);
+            return;
+          }
+          pendingDirection = direction;
+          updateStatus(direction + ' trade armed. Waiting for candle close...');
+          window.location.href = '?trade_id=' + prepData.trade_id + '&symbol=' + encodeURIComponent(symbol);
+        });
+      });
+    })
+    .catch(function(err) {
+      console.error('armTrade chain failed', err);
+      updateStatus('Network error: ' + err.message);
+      setButtonsDisabled(false);
+    });
+  }
+
+  fetchCandleData();
 }
 
 function cancelTrade() {
