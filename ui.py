@@ -1399,6 +1399,12 @@ def _api_execute_trade_impl():
     market = ea_state["market"].get(symbol, {})
     tick_bid = market.get("bid")
     tick_ask = market.get("ask")
+    if tick_bid is None and tick_ask is None:
+        try:
+            from symbol_store import get_tick
+            tick_bid, tick_ask = get_tick(symbol)
+        except Exception:
+            pass
     if direction == "BUY":
         executed_entry = tick_ask if tick_ask is not None else entry
     else:

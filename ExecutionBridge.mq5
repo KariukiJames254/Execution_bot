@@ -20,7 +20,7 @@ string trackedTradeId = "";
 datetime armedTime = 0;
 datetime armedBarTime = 0;
 
-int _PeriodToTf(int tf_minutes);
+ENUM_TIMEFRAMES _PeriodToTf(int tf_minutes);
 bool SendPostRequest(string url, string jsonPayload, string &response);
 bool SendGetRequest(string url, string &response);
 string ExtractJsonValue(string json, string key);
@@ -631,7 +631,7 @@ void ReportSymbolInfoFor(string symbol)
    SendPostRequest(url, payload, response);
 }
 
-int _PeriodToTf(int tf_minutes)
+ENUM_TIMEFRAMES _PeriodToTf(int tf_minutes)
 {
    if(tf_minutes <= 1) return PERIOD_M1;
    else if(tf_minutes <= 5) return PERIOD_M5;
