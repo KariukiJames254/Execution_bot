@@ -460,7 +460,28 @@ function getSelectedSymbol() {
 }
 
 function onSymbolChange() {
+  var symbol = getSelectedSymbol();
+  if (symbol) {
+    localStorage.setItem('selectedSymbol', symbol);
+    updateUrlSymbol(symbol);
+  }
   updateSettings();
+}
+
+function updateUrlSymbol(symbol) {
+  var u = new URL(window.location);
+  u.searchParams.set('symbol', symbol);
+  window.history.replaceState({}, '', u);
+}
+
+function restoreSelectedSymbol() {
+  var stored = localStorage.getItem('selectedSymbol');
+  if (!stored) return;
+  var sel = document.getElementById('symbol');
+  if (!sel) return;
+  for (var i = 0; i < sel.options.length; i++) {
+    if (sel.options[i].value === stored) { sel.value = stored; updateUrlSymbol(stored); return; }
+  }
 }
 
 function updateSettings() {
@@ -560,7 +581,7 @@ function armTrade(direction) {
         }
         pendingDirection = direction;
         updateStatus(direction + ' trade armed. Waiting for candle close...');
-        window.location.href = '?trade_id=' + prepData.trade_id;
+          window.location.href = '?trade_id=' + prepData.trade_id + '&symbol=' + encodeURIComponent(symbol);
       });
     });
   })
@@ -594,7 +615,8 @@ function cancelTrade() {
     if (data.status === 'cancelled') {
       updateStatus('Trade cancelled by user.');
       pendingDirection = null;
-      setTimeout(function() { window.location.href = '/'; }, 1500);
+       var sel = getSelectedSymbol();
+       setTimeout(function() { window.location.href = sel ? '/?symbol=' + encodeURIComponent(sel) : '/'; }, 1500);
     } else {
       updateStatus(data.error || 'Failed to cancel trade.');
     }
@@ -840,6 +862,7 @@ function formatHoldTime(seconds) {
 }
 
 // Start the refresh loop
+restoreSelectedSymbol();
 if (countdownInterval) clearInterval(countdownInterval);
 countdownInterval = setInterval(refreshData, 1000);
 refreshData();

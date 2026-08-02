@@ -401,7 +401,7 @@ def _format_countdown(seconds):
 def dashboard():
     connected = _ea_connected()
     account = ea_state.get("account") or None
-    current = SYMBOL
+    current = _current_symbol()
     market = ea_state["market"].get(current, {})
     bid = market.get("bid")
     ask = market.get("ask")
