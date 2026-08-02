@@ -16,6 +16,7 @@ string pendingDirection = "";
 datetime candleCloseTime = 0;
 string armedSymbol = "";
 int armedTfMinutes = 15;
+string ea_requested_symbol = "";
 string trackedTradeId = "";
 datetime armedTime = 0;
 datetime armedBarTime = 0;
@@ -28,6 +29,7 @@ string Trim(string value);
 void ReportMarket();
 void ReportSymbolInfo();
 void ReportSymbolInfoFor(string symbol);
+void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf);
 void ReportAccount();
 
 int OnInit()
@@ -50,9 +52,21 @@ void OnTimer()
    static datetime lastSymbolInfoReport = 0;
    if(TimeCurrent() - lastSymbolInfoReport >= 10)
    {
-      ReportSymbolInfo();
-      if(armedSymbol != "" && armedSymbol != _Symbol)
-         ReportSymbolInfoFor(armedSymbol);
+       ReportSymbolInfo();
+       if(armedSymbol != "" && armedSymbol != _Symbol)
+       {
+          ReportSymbolInfoFor(armedSymbol);
+          ReportCandleFor(armedSymbol, _PeriodToTf(armedTfMinutes));
+       }
+      string reqSym = ea_requested_symbol;
+      if(reqSym != "" && reqSym != _Symbol && reqSym != armedSymbol)
+      {
+         if(SymbolSelect(reqSym, true))
+         {
+            ReportSymbolInfoFor(reqSym);
+            ReportCandleFor(reqSym, _PeriodToTf(armedTfMinutes));
+         }
+      }
       lastSymbolInfoReport = TimeCurrent();
    }
 
@@ -96,6 +110,11 @@ void OnTimer()
 
     string tradeId = Trim(ExtractJsonValue(response, "trade_id"));
     string status = Trim(ExtractJsonValue(response, "status"));
+    string requestedSymbol = Trim(ExtractJsonValue(response, "requested_symbol"));
+
+    if(requestedSymbol != "")
+       ea_requested_symbol = requestedSymbol;
+
     string targetSymbol = Trim(ExtractJsonValue(response, "target_symbol"));
 
     if(tradeId == "" || status == "")
@@ -626,9 +645,42 @@ void ReportSymbolInfoFor(string symbol)
       (int)filling, (int)visible, (int)trade_mode
    );
 
-   string response;
-   string url = FlaskURL + "/api/ea/report_symbol_info";
-   SendPostRequest(url, payload, response);
+    string response;
+    string url = FlaskURL + "/api/ea/report_symbol_info";
+    SendPostRequest(url, payload, response);
+}
+
+void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf)
+{
+   if(symbol == "" || tf == 0)
+      return;
+
+   datetime t = iTime(symbol, tf, 0);
+   if(t == 0)
+      return;
+
+   double o = iOpen(symbol, tf, 0);
+   double h = iHigh(symbol, tf, 0);
+   double l = iLow(symbol, tf, 0);
+   double c = iClose(symbol, tf, 0);
+   long   v = (long)iVolume(symbol, tf, 0);
+
+   string tfName = "M15";
+   if(tf == PERIOD_M1) tfName = "M1";
+   else if(tf == PERIOD_M5) tfName = "M5";
+   else if(tf == PERIOD_M15) tfName = "M15";
+   else if(tf == PERIOD_M30) tfName = "M30";
+   else if(tf == PERIOD_H1) tfName = "H1";
+   else if(tf == PERIOD_H4) tfName = "H4";
+   else if(tf == PERIOD_D1) tfName = "D1";
+
+   string payload = StringFormat(
+      "{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"tick_volume\":%d}",
+      symbol, tfName, (long)t, o, h, l, c, (int)v
+   );
+   string response2;
+   string url2 = FlaskURL + "/api/ea/report_candle";
+   SendPostRequest(url2, payload, response2);
 }
 
 ENUM_TIMEFRAMES _PeriodToTf(int tf_minutes)

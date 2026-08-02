@@ -15,6 +15,7 @@ logger = setup_logger("symbol_store")
 
 _lock = threading.Lock()
 _symbols = {}
+_candles = {}
 
 
 class SymbolInfo:
@@ -126,3 +127,25 @@ def symbol_info(symbol=None):
         except Exception:
             return None
     return None
+
+
+def set_candle(symbol, timeframe, candle):
+    """Store the latest candle data reported by the EA."""
+    key = _key(symbol)
+    if not key:
+        return
+    with _lock:
+        _candles.setdefault(key, {})
+        _candles[key][timeframe] = candle
+
+
+def get_candle(symbol=None, timeframe=None):
+    """Return the latest candle reported by the EA, or ``None``."""
+    key = _key(symbol)
+    if not key:
+        return None
+    if timeframe is None:
+        from config import TIMEFRAME
+        timeframe = TIMEFRAME
+    with _lock:
+        return _candles.get(key, {}).get(timeframe)
