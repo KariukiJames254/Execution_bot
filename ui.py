@@ -309,6 +309,10 @@ def is_connected():
     return _ea_connected()
 
 
+def ensure_connected():
+    return is_connected()
+
+
 def _get_risk_amount(data, symbol):
     risk_mode = data.get("risk_mode", "amt")
     risk_amount = float(data.get("risk_amount", DEFAULT_RISK_AMOUNT))
