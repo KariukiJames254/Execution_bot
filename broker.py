@@ -1,10 +1,17 @@
-import MetaTrader5 as mt5
 from logger import setup_logger
+
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    mt5 = None
 
 logger = setup_logger("broker")
 
 
 def initialize():
+    if mt5 is None:
+        logger.error("MetaTrader5 package is not installed on this VPS")
+        return False
     if not mt5.initialize():
         logger.error(f"MT5 initialization failed: {mt5.last_error()}")
         return False
@@ -41,6 +48,8 @@ def login(login, password, server, path=None):
 
 
 def is_connected():
+    if mt5 is None:
+        return False
     return mt5.terminal_info() is not None and mt5.account_info() is not None
 
 

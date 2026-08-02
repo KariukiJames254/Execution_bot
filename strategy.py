@@ -86,14 +86,14 @@ class Strategy:
 
     @staticmethod
     def _get_point():
-        import MetaTrader5 as mt5
-        info = mt5.symbol_info(Strategy.SYMBOL)
+        from symbol_store import symbol_info
+        info = symbol_info(Strategy.SYMBOL)
         return info.point if info else 0.00001
 
     @staticmethod
     def _get_digits():
-        import MetaTrader5 as mt5
-        info = mt5.symbol_info(Strategy.SYMBOL)
+        from symbol_store import symbol_info
+        info = symbol_info(Strategy.SYMBOL)
         return info.digits if info else 5
 
 

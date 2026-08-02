@@ -1,8 +1,29 @@
-import MetaTrader5 as mt5
 from logger import setup_logger
 from notifications import notify
 
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    mt5 = None
+
+from symbol_store import symbol_info, get_tick
+
+_ORDER_TYPE_BUY = getattr(mt5, "ORDER_TYPE_BUY", 0)
+_ORDER_TYPE_SELL = getattr(mt5, "ORDER_TYPE_SELL", 1)
+_TRADE_ACTION_DEAL = getattr(mt5, "TRADE_ACTION_DEAL", 0)
+_TRADE_ACTION_SLTP = getattr(mt5, "TRADE_ACTION_SLTP", 3)
+_ORDER_TIME_GTC = getattr(mt5, "ORDER_TIME_GTC", 1)
+_TRADE_RETCODE_DONE = getattr(mt5, "TRADE_RETCODE_DONE", 0)
+_ORDER_FILLING_FOK = getattr(mt5, "ORDER_FILLING_FOK", 2)
+_ORDER_FILLING_IOC = getattr(mt5, "ORDER_FILLING_IOC", 1)
+_ORDER_FILLING_RETURN = getattr(mt5, "ORDER_FILLING_RETURN", 0)
+
 logger = setup_logger("execution")
+
+
+def _ensure_mt5():
+    if mt5 is None:
+        raise RuntimeError("MetaTrader5 package is not installed on this VPS; trades must be executed by the EA")
 
 
 def validate_min_stop_distance(symbol, order_type, entry, sl, tp):
@@ -12,7 +33,7 @@ def validate_min_stop_distance(symbol, order_type, entry, sl, tp):
     point = info.point
     min_stop = info.trade_stops_level * point
 
-    if order_type == mt5.ORDER_TYPE_BUY:
+    if order_type == _ORDER_TYPE_BUY:
         sl_dist = entry - sl
         tp_dist = tp - entry
     else:
@@ -35,7 +56,7 @@ def validate_min_stop_distance(symbol, order_type, entry, sl, tp):
 
 
 def execute_sl_tp(order_type, price, sl, tp):
-    if order_type == mt5.ORDER_TYPE_BUY:
+    if order_type == _ORDER_TYPE_BUY:
         if sl >= price or tp <= price:
             logger.error("Invalid stops for BUY: SL must be below entry, TP must be above entry")
             return None
@@ -47,7 +68,7 @@ def execute_sl_tp(order_type, price, sl, tp):
 
 
 def execute_buy(symbol, lot, sl, tp, comment=""):
-    tick = mt5.symbol_info_tick(symbol)
+    tick = _symbol_info(symbol)
     if tick is None:
         logger.error("Failed to get tick for " + symbol)
         return None
@@ -59,29 +80,29 @@ def execute_buy(symbol, lot, sl, tp, comment=""):
     sl = round(sl, info.digits)
     tp = round(tp, info.digits)
 
-    if not execute_sl_tp(mt5.ORDER_TYPE_BUY, tick.ask, sl, tp):
+    if not execute_sl_tp(_ORDER_TYPE_BUY, tick.ask, sl, tp):
         return None
-    if not validate_min_stop_distance(symbol, mt5.ORDER_TYPE_BUY, tick.ask, sl, tp):
+    if not validate_min_stop_distance(symbol, _ORDER_TYPE_BUY, tick.ask, sl, tp):
         return None
     request = {
-        "action": mt5.TRADE_ACTION_DEAL,
+        "action": _TRADE_ACTION_DEAL,
         "symbol": symbol,
         "volume": lot,
-        "type": mt5.ORDER_TYPE_BUY,
+        "type": _ORDER_TYPE_BUY,
         "price": tick.ask,
         "sl": sl,
         "tp": tp,
         "deviation": 10,
         "magic": 123456,
         "comment": comment,
-        "type_time": mt5.ORDER_TIME_GTC,
+        "type_time": _ORDER_TIME_GTC,
         "type_filling": _get_filling(symbol),
     }
     return _send_order(request, "BUY")
 
 
 def execute_sell(symbol, lot, sl, tp, comment=""):
-    tick = mt5.symbol_info_tick(symbol)
+    tick = _symbol_info(symbol)
     if tick is None:
         logger.error("Failed to get tick for " + symbol)
         return None
@@ -93,28 +114,30 @@ def execute_sell(symbol, lot, sl, tp, comment=""):
     sl = round(sl, info.digits)
     tp = round(tp, info.digits)
 
-    if not execute_sl_tp(mt5.ORDER_TYPE_SELL, tick.bid, sl, tp):
+    if not execute_sl_tp(_ORDER_TYPE_SELL, tick.bid, sl, tp):
         return None
-    if not validate_min_stop_distance(symbol, mt5.ORDER_TYPE_SELL, tick.bid, sl, tp):
+    if not validate_min_stop_distance(symbol, _ORDER_TYPE_SELL, tick.bid, sl, tp):
         return None
     request = {
-        "action": mt5.TRADE_ACTION_DEAL,
+        "action": _TRADE_ACTION_DEAL,
         "symbol": symbol,
         "volume": lot,
-        "type": mt5.ORDER_TYPE_SELL,
+        "type": _ORDER_TYPE_SELL,
         "price": tick.bid,
         "sl": sl,
         "tp": tp,
         "deviation": 10,
         "magic": 123456,
         "comment": comment,
-        "type_time": mt5.ORDER_TIME_GTC,
+        "type_time": _ORDER_TIME_GTC,
         "type_filling": _get_filling(symbol),
     }
     return _send_order(request, "SELL")
 
 
 def close_position(position_ticket):
+    if mt5 is None:
+        return None
     position = mt5.positions_get(ticket=position_ticket)
     if position is None or len(position) == 0:
         logger.error(f"Position {position_ticket} not found")
@@ -124,20 +147,20 @@ def close_position(position_ticket):
     symbol = pos.symbol
     volume = pos.volume
 
-    tick = mt5.symbol_info_tick(symbol)
+    tick = _symbol_info(symbol)
     if tick is None:
         logger.error(f"Failed to get tick for {symbol}")
         return None
 
-    if pos.type == mt5.ORDER_TYPE_BUY:
+    if pos.type == _ORDER_TYPE_BUY:
         price = tick.bid
-        order_type = mt5.ORDER_TYPE_SELL
+        order_type = _ORDER_TYPE_SELL
     else:
         price = tick.ask
-        order_type = mt5.ORDER_TYPE_BUY
+        order_type = _ORDER_TYPE_BUY
 
     request = {
-        "action": mt5.TRADE_ACTION_DEAL,
+        "action": _TRADE_ACTION_DEAL,
         "symbol": symbol,
         "volume": volume,
         "type": order_type,
@@ -146,20 +169,22 @@ def close_position(position_ticket):
         "deviation": 10,
         "magic": 123456,
         "comment": "Close",
-        "type_time": mt5.ORDER_TIME_GTC,
+        "type_time": _ORDER_TIME_GTC,
         "type_filling": _get_filling(symbol),
     }
     return _send_order(request, f"CLOSE {pos.type}")
 
 
 def set_break_even(position_ticket, symbol):
+    if mt5 is None:
+        return False
     position = mt5.positions_get(ticket=position_ticket)
     if position is None or len(position) == 0:
         logger.error("Position " + str(position_ticket) + " not found for break-even")
         return False
 
     pos = position[0]
-    tick = mt5.symbol_info_tick(symbol)
+    tick = _symbol_info(symbol)
     if tick is None:
         logger.error("Failed to get tick for " + symbol)
         return False
@@ -167,17 +192,17 @@ def set_break_even(position_ticket, symbol):
     point = _get_point(symbol)
     digits = _get_digits(symbol)
 
-    if pos.type == mt5.ORDER_TYPE_BUY:
+    if pos.type == _ORDER_TYPE_BUY:
         new_sl = round(pos.price_open, digits)
-        if not execute_sl_tp(mt5.ORDER_TYPE_BUY, tick.bid, new_sl, pos.tp):
+        if not execute_sl_tp(_ORDER_TYPE_BUY, tick.bid, new_sl, pos.tp):
             return False
     else:
         new_sl = round(pos.price_open, digits)
-        if not execute_sl_tp(mt5.ORDER_TYPE_SELL, tick.ask, new_sl, pos.tp):
+        if not execute_sl_tp(_ORDER_TYPE_SELL, tick.ask, new_sl, pos.tp):
             return False
 
     request = {
-        "action": mt5.TRADE_ACTION_SLTP,
+        "action": _TRADE_ACTION_SLTP,
         "position": position_ticket,
         "sl": new_sl,
         "tp": pos.tp,
@@ -185,16 +210,18 @@ def set_break_even(position_ticket, symbol):
         "deviation": 10,
         "magic": 123456,
         "comment": "Break-even",
-        "type_time": mt5.ORDER_TIME_GTC,
+        "type_time": _ORDER_TIME_GTC,
         "type_filling": _get_filling(symbol),
     }
     result = _send_order(request, "BREAK-EVEN")
-    if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+    if result is not None and result.retcode == _TRADE_RETCODE_DONE:
         notify(f"🔵 <b>Break-Even Activated</b>\nTicket: {position_ticket}\nSL moved to: {new_sl}")
-    return result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
+    return result is not None and result.retcode == _TRADE_RETCODE_DONE
 
 
 def get_open_positions(symbol=None):
+    if mt5 is None:
+        return []
     filters = {}
     if symbol:
         filters["symbol"] = symbol
@@ -205,6 +232,7 @@ def get_open_positions(symbol=None):
 
 
 def _send_order(request, label):
+    _ensure_mt5()
     check = mt5.order_check(request)
     if check is None:
         err = mt5.last_error()
@@ -221,7 +249,7 @@ def _send_order(request, label):
         logger.error(f"{label} order_send returned None: {err}")
         raise RuntimeError(f"order_send failed: {err}")
 
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
+    if result.retcode != _TRADE_RETCODE_DONE:
         logger.error(
             f"{label} order failed: retcode={result.retcode}, "
             f"comment={result.comment}, request={request}"
@@ -233,32 +261,32 @@ def _send_order(request, label):
 
 
 def _symbol_info(symbol):
-    return mt5.symbol_info(symbol)
+    return symbol_info(symbol)
 
 
 def _get_point(symbol):
-    info = mt5.symbol_info(symbol)
+    info = symbol_info(symbol)
     if info is None:
         return 0.00001
     return info.point
 
 
 def _get_digits(symbol):
-    info = mt5.symbol_info(symbol)
+    info = symbol_info(symbol)
     if info is None:
         return 5
     return info.digits
 
 
 def _get_filling(symbol):
-    info = mt5.symbol_info(symbol)
+    info = symbol_info(symbol)
     if info is None:
-        return mt5.ORDER_FILLING_FOK
+        return _ORDER_FILLING_FOK
     mode = info.filling_mode
     if mode & 1:
-        return mt5.ORDER_FILLING_FOK
+        return _ORDER_FILLING_FOK
     if mode & 2:
-        return mt5.ORDER_FILLING_IOC
+        return _ORDER_FILLING_IOC
     if mode & 4:
-        return mt5.ORDER_FILLING_RETURN
-    return mt5.ORDER_FILLING_FOK
+        return _ORDER_FILLING_RETURN
+    return _ORDER_FILLING_FOK

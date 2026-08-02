@@ -1,14 +1,33 @@
-import MetaTrader5 as mt5
 from logger import setup_logger
+from symbol_store import symbol_info, get_tick
+
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    mt5 = None
 
 logger = setup_logger("risk")
+
+
+class _Tick:
+    """Minimal stand-in for an MT5 tick object."""
+
+    __slots__ = ("bid", "ask", "time")
+
+    def __init__(self, bid, ask):
+        self.bid = bid
+        self.ask = ask
+        self.time = None
+
+    def __bool__(self):
+        return self.bid is not None and self.ask is not None
 
 
 def _symbol_info(symbol=None):
     if symbol is None:
         from config import SYMBOL
         symbol = SYMBOL
-    info = mt5.symbol_info(symbol)
+    info = symbol_info(symbol)
     if info is None:
         logger.error(f"Symbol info not found for {symbol}")
     return info
@@ -18,10 +37,11 @@ def _tick_info(symbol=None):
     if symbol is None:
         from config import SYMBOL
         symbol = SYMBOL
-    tick = mt5.symbol_info_tick(symbol)
-    if tick is None:
+    bid, ask = get_tick(symbol)
+    if bid is None or ask is None:
         logger.error(f"Failed to get tick for {symbol}")
-    return tick
+        return None
+    return _Tick(bid, ask)
 
 
 def _account_info():

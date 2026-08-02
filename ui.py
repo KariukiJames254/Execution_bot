@@ -19,6 +19,10 @@ try:
 except Exception:
     _execution_get_open_positions = None
 
+_TRADE_RETCODE_DONE = getattr(mt5, "TRADE_RETCODE_DONE", 0)
+_ORDER_TYPE_BUY = getattr(mt5, "ORDER_TYPE_BUY", 0)
+_ORDER_TYPE_SELL = getattr(mt5, "ORDER_TYPE_SELL", 1)
+
 logger = setup_logger("ui")
 app = Flask(__name__, template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates"))
 app.config["SECRET_KEY"] = DASHBOARD_SECRET_KEY or secrets.token_urlsafe(32)
@@ -51,6 +55,7 @@ ea_state = {
     "account": {},
     "positions": {},
     "market": {},
+    "symbols": {},
     "last_seen": None,
 }
 TRADE_HISTORY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.db")
@@ -425,7 +430,7 @@ def _format_countdown(seconds):
 def dashboard():
     connected = _ea_connected()
     account = ea_state.get("account") or None
-    current = SYMBOL
+    current = _current_symbol()
     market = ea_state["market"].get(current, {})
     bid = market.get("bid")
     ask = market.get("ask")
@@ -810,6 +815,27 @@ def api_ea_report_market():
         return jsonify({"error": "Invalid market report"}), 400
     ea_state["market"][symbol] = {"bid": bid, "ask": ask, "updated_at": datetime.now().isoformat()}
     ea_state["last_seen"] = datetime.now().isoformat()
+    try:
+        from symbol_store import update_tick
+        update_tick(symbol, bid, ask)
+    except Exception:
+        pass
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ea/report_symbol_info", methods=["POST"])
+def api_ea_report_symbol_info():
+    data = request.get_json(silent=True) or {}
+    symbol = data.get("symbol")
+    if not symbol:
+        return jsonify({"error": "Missing symbol"}), 400
+    ea_state["symbols"][symbol] = data
+    try:
+        from symbol_store import set_symbol_info
+        set_symbol_info(symbol, data)
+    except Exception:
+        pass
+    add_log("info", f"Received symbol info from EA for {symbol}")
     return jsonify({"status": "ok"})
 
 
@@ -904,7 +930,7 @@ def api_close_position():
     if not ensure_connected():
         return jsonify({"error": "Not connected"}), 400
     result = close_position(int(ticket))
-    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+    if result and result.retcode == _TRADE_RETCODE_DONE:
         add_log("info", f"Closed position ticket={ticket}")
         notify(f"🔒 <b>Trade Closed</b>\nTicket: {ticket}\nPnL: {pnl}\nClosed at: {close_price}")
 
@@ -1061,13 +1087,15 @@ def api_prepare_trade():
         if sl == 0 or entry == 0:
             return jsonify({"error": "Invalid candle data"}), 400
 
-        info = mt5.symbol_info(symbol) if mt5 is not None else None
+        info = ea_state.get("symbols", {}).get(symbol)
         if info is None:
             digits = 5
             point = 0.00001
+            volume_max = None
         else:
-            digits = getattr(info, "digits", 5)
-            point = getattr(info, "point", 0.00001)
+            digits = int(info.get("digits", 5) or 5)
+            point = float(info.get("point") or 0.00001)
+            volume_max = info.get("volume_max")
 
         entry = round(entry, digits)
         sl = round(sl, digits)
@@ -1091,7 +1119,6 @@ def api_prepare_trade():
         be_rr = float(data.get("be_rr", BE_RR))
 
         lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
-        volume_max = getattr(info, "volume_max", None)
         if volume_max is not None and lot > volume_max:
             add_log("warn", f"Calculated lot {lot} exceeds broker max {volume_max}. Capping.")
             lot = volume_max
@@ -1104,7 +1131,7 @@ def api_prepare_trade():
 
         tp = round(tp, digits)
 
-        dist_points = abs(entry - sl) / info.point if info else 0
+        dist_points = abs(entry - sl) / point
         dist_pips = dist_points / 10.0
 
         be_trigger = entry + diff * be_rr if direction == "BUY" else entry - diff * be_rr
@@ -1134,7 +1161,7 @@ def api_prepare_trade():
             "risk_amount": risk_amount,
             "rr_ratio": rr_ratio,
             "be_rr": be_rr,
-            "be_trigger": round(be_trigger, info.digits) if info else be_trigger,
+            "be_trigger": round(be_trigger, digits),
             "distance_pips": round(dist_pips, 2),
             "candle_time": candle_time_str,
             "candle_open": open_,
@@ -1161,7 +1188,7 @@ def api_prepare_trade():
             "distance_pips": round(dist_pips, 2),
             "rr_ratio": rr_ratio,
             "be_rr": be_rr,
-            "be_trigger": round(be_trigger, info.digits) if info else be_trigger,
+            "be_trigger": round(be_trigger, digits),
             "status": "armed",
             "candle_time": candle_time_str,
             "candle_open": open_,
@@ -1265,12 +1292,12 @@ def _api_execute_trade_impl():
         print(f"EXECUTE_TRADE 400: No market price bid={bid} ask={ask}")
         return jsonify({"status": "error", "retcode": 0, "comment": "Could not fetch market price"}), 200
 
-    info = mt5.symbol_info(symbol)
+    info = ea_state.get("symbols", {}).get(symbol)
     if info is None:
         print(f"EXECUTE_TRADE 400: Symbol info unavailable")
         return jsonify({"status": "error", "retcode": 0, "comment": "Symbol info unavailable"}), 200
-    digits = info.digits
-    point = info.point
+    digits = int(info.get("digits", 5) or 5)
+    point = float(info.get("point") or 0.00001)
 
     candle_high = trade.get("candle_high")
     candle_low = trade.get("candle_low")
@@ -1305,9 +1332,10 @@ def _api_execute_trade_impl():
     if lot <= 0:
         print(f"EXECUTE_TRADE 400: Invalid lot calculated lot={lot}")
         return jsonify({"status": "error", "retcode": 0, "comment": "Invalid lot size calculated"}), 200
-    if lot > info.volume_max:
-        add_log("warn", f"Calculated lot {lot} exceeds broker max {info.volume_max}. Capping.")
-        lot = info.volume_max
+    volume_max = info.get("volume_max")
+    if volume_max is not None and lot > volume_max:
+        add_log("warn", f"Calculated lot {lot} exceeds broker max {volume_max}. Capping.")
+        lot = volume_max
 
     if direction == "BUY":
         tp = entry + abs(entry - sl) * rr_ratio
@@ -1315,7 +1343,7 @@ def _api_execute_trade_impl():
         tp = entry - abs(entry - sl) * rr_ratio
     tp = round(tp, digits)
 
-    order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
+    order_type = _ORDER_TYPE_BUY if direction == "BUY" else _ORDER_TYPE_SELL
     if not validate_min_stop_distance(symbol, order_type, entry, sl, tp):
         print(f"EXECUTE_TRADE 400: Stop distance too small for broker sl={sl} tp={tp} entry={entry}")
         return jsonify({"status": "error", "retcode": 0, "comment": "Stop distance too small for broker requirements. Select a candle with a larger range."}), 200
@@ -1341,8 +1369,13 @@ def _api_execute_trade_impl():
         {"name": "Trade Opened", "done": False},
     ]
 
-    tick = mt5.symbol_info_tick(symbol)
-    executed_entry = tick.ask if direction == "BUY" else tick.bid if tick else entry
+    market = ea_state["market"].get(symbol, {})
+    tick_bid = market.get("bid")
+    tick_ask = market.get("ask")
+    if direction == "BUY":
+        executed_entry = tick_ask if tick_ask is not None else entry
+    else:
+        executed_entry = tick_bid if tick_bid is not None else entry
     slippage = abs(executed_entry - entry)
 
     from execution import execute_buy, execute_sell
@@ -1357,7 +1390,7 @@ def _api_execute_trade_impl():
         add_log("error", f"Execution exception: {e}")
         return jsonify({"status": "error", "retcode": 0, "comment": str(e)}), 500
 
-    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+    if result and result.retcode == _TRADE_RETCODE_DONE:
         pending_trades[trade_id]["status"] = "executed"
         pending_trades[trade_id]["stages"][-1]["done"] = True
         pending_trades[trade_id]["ticket"] = result.order
@@ -1475,7 +1508,7 @@ def api_trade():
         else:
             result = execute_sell(symbol, lot, sl_price, tp_price, comment="UI Trade")
 
-        if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+        if result is not None and result.retcode == _TRADE_RETCODE_DONE:
             _, ask = get_current_price(symbol)
             add_log("success", f"{direction} {lot} {symbol} entry={ask} SL={sl_price} TP={tp_price}")
             return jsonify({"message": f"{direction} trade executed successfully"})
