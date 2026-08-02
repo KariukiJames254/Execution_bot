@@ -66,15 +66,23 @@ def _safe_call(func, *args, on_ipc_reconnect=None, **kwargs):
 
 
 def _ensure_symbol_selected(symbol):
+    if mt5 is None:
+        return symbol_info(symbol) is not None
     info = symbol_info(symbol)
-    if info is None and mt5 is not None:
+    if info is None:
         info = _safe_call(mt5.symbol_info, symbol)
     if info is None:
         return False
     if not getattr(info, "visible", True):
         logger.info(f"Selecting {symbol} in Market Watch")
-        if mt5 is not None:
-            _safe_call(mt5.symbol_select, symbol, True)
+        _safe_call(mt5.symbol_select, symbol, True)
+        import time as _time
+        for _ in range(5):
+            _time.sleep(0.3)
+            info = _safe_call(mt5.symbol_info, symbol)
+            if getattr(info, "visible", True):
+                return True
+        return False
     return True
 
 
@@ -104,6 +112,16 @@ def get_latest_candle(symbol, timeframe=None):
     if rates is None or len(rates) == 0:
         logger.warning(f"copy_rates_from_pos failed for {symbol}, trying copy_rates_range")
         rates = _safe_call(_fetch_range, on_ipc_reconnect=_fetch_range)
+
+    if rates is None or len(rates) == 0:
+        # After SymbolSelect the symbol's history may not be loaded yet;
+        # retry a few times with a short delay before giving up.
+        import time as _time
+        for _ in range(3):
+            _time.sleep(0.5)
+            rates = _safe_call(_fetch_candle, on_ipc_reconnect=_fetch_candle)
+            if rates is not None and len(rates) > 0:
+                break
 
     if rates is None or len(rates) == 0:
         logger.error(f"No latest candle data for {symbol}")

@@ -490,6 +490,15 @@ def api_status():
     market = ea_state["market"].get(current, {})
     bid = market.get("bid")
     ask = market.get("ask")
+    if bid is None and ask is None:
+        try:
+            from symbol_store import get_tick
+            bid, ask = get_tick(current)
+            if bid is None and ask is None:
+                from market import get_current_price
+                bid, ask = get_current_price(current)
+        except Exception:
+            pass
     
     trade_id = request.args.get("trade_id")
     pending = pending_trades.get(trade_id) if trade_id else None
@@ -753,11 +762,13 @@ def api_ea_pending():
                 candle_close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
             except Exception:
                 pass
+        trade_symbol = trade.get("symbol", _current_symbol())
         return jsonify({
             "trade_id": trade["trade_id"],
             "status": trade["status"],
             "direction": trade["direction"],
             "symbol": trade["symbol"],
+            "target_symbol": trade_symbol,
             "candle_time": candle_time_str,
             "timeframe": tf,
             "candle_close_unix": candle_close_unix,
@@ -883,7 +894,14 @@ def api_candle_data():
     candle = get_latest_candle(current)
 
     if not candle:
-        return jsonify({"error": "No candle data"})
+        from symbol_store import has_symbol_info
+        if not has_symbol_info(current):
+            return jsonify({
+                "error": "No candle data",
+                "symbol": current,
+                "message": f"Symbol {current} not registered with broker. Select it in Market Watch or switch to a registered symbol.",
+            })
+        return jsonify({"error": "No candle data", "symbol": current})
 
     return jsonify({
         "symbol": current,
@@ -901,6 +919,15 @@ def api_price():
     market = ea_state["market"].get(current, {})
     bid = market.get("bid")
     ask = market.get("ask")
+    if bid is None and ask is None:
+        try:
+            from symbol_store import get_tick
+            bid, ask = get_tick(current)
+            if bid is None and ask is None:
+                from market import get_current_price
+                bid, ask = get_current_price(current)
+        except Exception:
+            pass
     return jsonify({"bid": bid, "ask": ask})
 
 
