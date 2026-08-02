@@ -86,18 +86,53 @@ def _ensure_symbol_selected(symbol):
     return True
 
 
+def _normalize_ea_candle(candle):
+    """Convert EA-reported candle dict to the format get_latest_candle returns."""
+    if candle is None:
+        return None
+    import pandas as pd
+    time_val = candle.get("time")
+    if time_val is not None:
+        try:
+            time_val = pd.to_datetime(float(time_val), unit="s")
+        except (ValueError, TypeError):
+            try:
+                time_val = pd.to_datetime(time_val)
+            except Exception:
+                time_val = pd.to_datetime(0, unit="s")
+    return {
+        "time": time_val,
+        "open": float(candle.get("open", 0)),
+        "high": float(candle.get("high", 0)),
+        "low": float(candle.get("low", 0)),
+        "close": float(candle.get("close", 0)),
+        "tick_volume": candle.get("tick_volume", 0),
+        "spread": candle.get("spread", 0),
+        "real_volume": candle.get("real_volume", 0),
+    }
+
+
 def get_latest_candle(symbol, timeframe=None):
     if timeframe is None:
         timeframe = TIMEFRAME
 
     if not _ensure_symbol_selected(symbol):
         logger.error(f"Symbol {symbol} not available")
+        from symbol_store import get_candle
+        ea_candle = get_candle(symbol, timeframe)
+        if ea_candle:
+            return _normalize_ea_candle(ea_candle)
+        return None
+
+    if mt5 is None:
+        from symbol_store import get_candle
+        ea_candle = get_candle(symbol, timeframe)
+        if ea_candle:
+            return _normalize_ea_candle(ea_candle)
+        logger.error(f"No MT5 connection and no EA candle data for {symbol}")
         return None
 
     tf = _resolve_timeframe(timeframe)
-    if tf is None:
-        logger.error(f"Invalid timeframe: {timeframe}")
-        return None
 
     def _fetch_candle():
         return mt5.copy_rates_from_pos(symbol, tf, 0, 1)

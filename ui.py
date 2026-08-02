@@ -88,7 +88,9 @@ ea_state = {
     "positions": {},
     "market": {},
     "symbols": {},
+    "candles": {},
     "last_seen": None,
+    "requested_symbol": None,
 }
 TRADE_HISTORY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.db")
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json")
@@ -461,6 +463,15 @@ def api_status():
     market = ea_state["market"].get(current, {})
     bid = market.get("bid")
     ask = market.get("ask")
+    if bid is None and ask is None:
+        try:
+            from symbol_store import get_tick
+            bid, ask = get_tick(current)
+            if bid is None and ask is None:
+                from market import get_current_price
+                bid, ask = get_current_price(current)
+        except Exception:
+            pass
     
     trade_id = request.args.get("trade_id")
     pending = pending_trades.get(trade_id) if trade_id else None
@@ -724,11 +735,14 @@ def api_ea_pending():
                 candle_close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
             except Exception:
                 pass
+        trade_symbol = trade.get("symbol", _current_symbol())
         return jsonify({
             "trade_id": trade["trade_id"],
             "status": trade["status"],
             "direction": trade["direction"],
             "symbol": trade["symbol"],
+            "target_symbol": trade_symbol,
+            "requested_symbol": trade_symbol,
             "candle_time": candle_time_str,
             "timeframe": tf,
             "candle_close_unix": candle_close_unix,
@@ -739,7 +753,10 @@ def api_ea_pending():
             "error": trade.get("error", ""),
         })
 
-    return jsonify({"status": "idle"})
+    return jsonify({
+        "status": "idle",
+        "requested_symbol": ea_state.get("requested_symbol") or _current_symbol(),
+    })
 
 
 @app.route("/api/ea/report_account", methods=["POST"])
@@ -810,6 +827,33 @@ def api_ea_report_symbol_info():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/ea/report_candle", methods=["POST"])
+def api_ea_report_candle():
+    data = request.get_json(silent=True) or {}
+    symbol = data.get("symbol")
+    timeframe = data.get("timeframe", TIMEFRAME)
+    if not symbol:
+        return jsonify({"error": "Missing symbol"}), 400
+    ea_state["candles"][symbol] = data
+    ea_state["last_seen"] = datetime.now().isoformat()
+    try:
+        from symbol_store import set_candle
+        candle = {
+            "time": data.get("time"),
+            "open": data.get("open"),
+            "high": data.get("high"),
+            "low": data.get("low"),
+            "close": data.get("close"),
+            "tick_volume": data.get("tick_volume", 0),
+            "spread": data.get("spread", 0),
+            "real_volume": data.get("real_volume", 0),
+        }
+        set_candle(symbol, timeframe, candle)
+    except Exception:
+        pass
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/ea/report_execution", methods=["POST"])
 def api_ea_report_execution():
     data = request.get_json(silent=True) or {}
@@ -851,10 +895,26 @@ def api_settings():
 @app.route("/api/candle_data")
 def api_candle_data():
     current = _current_symbol()
+    ea_state["requested_symbol"] = current
     candle = get_latest_candle(current)
 
     if not candle:
-        return jsonify({"error": "No candle data"})
+        import time as _time
+        for _ in range(3):
+            _time.sleep(1.0)
+            candle = get_latest_candle(current)
+            if candle:
+                break
+
+    if not candle:
+        from symbol_store import has_symbol_info
+        if not has_symbol_info(current):
+            return jsonify({
+                "error": "No candle data",
+                "symbol": current,
+                "message": f"Symbol {current} not registered with broker. Select it in Market Watch or switch to a registered symbol.",
+            })
+        return jsonify({"error": "No candle data", "symbol": current})
 
     return jsonify({
         "symbol": current,
@@ -869,9 +929,30 @@ def api_candle_data():
 @app.route("/api/price")
 def api_price():
     current = _current_symbol()
+    ea_state["requested_symbol"] = current
     market = ea_state["market"].get(current, {})
     bid = market.get("bid")
     ask = market.get("ask")
+    if bid is None and ask is None:
+        try:
+            from symbol_store import get_tick
+            bid, ask = get_tick(current)
+            if bid is None and ask is None:
+                import time as _time
+                for _ in range(3):
+                    _time.sleep(1.0)
+                    try:
+                        from symbol_store import get_tick as _gt
+                        bid, ask = _gt(current)
+                        if bid is not None:
+                            break
+                    except Exception:
+                        pass
+                if bid is None and ask is None:
+                    from market import get_current_price
+                    bid, ask = get_current_price(current)
+        except Exception:
+            pass
     return jsonify({"bid": bid, "ask": ask})
 
 
@@ -1342,6 +1423,12 @@ def _api_execute_trade_impl():
     market = ea_state["market"].get(symbol, {})
     tick_bid = market.get("bid")
     tick_ask = market.get("ask")
+    if tick_bid is None and tick_ask is None:
+        try:
+            from symbol_store import get_tick
+            tick_bid, tick_ask = get_tick(symbol)
+        except Exception:
+            pass
     if direction == "BUY":
         executed_entry = tick_ask if tick_ask is not None else entry
     else:

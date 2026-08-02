@@ -14,9 +14,23 @@ TradeState currentState = STATE_IDLE;
 string pendingTradeId = "";
 string pendingDirection = "";
 datetime candleCloseTime = 0;
+string armedSymbol = "";
+int armedTfMinutes = 15;
+string ea_requested_symbol = "";
 string trackedTradeId = "";
 datetime armedTime = 0;
 datetime armedBarTime = 0;
+
+ENUM_TIMEFRAMES _PeriodToTf(int tf_minutes)
+{
+   if(tf_minutes <= 1) return PERIOD_M1;
+   else if(tf_minutes <= 5) return PERIOD_M5;
+   else if(tf_minutes <= 15) return PERIOD_M15;
+   else if(tf_minutes <= 30) return PERIOD_M30;
+   else if(tf_minutes <= 60) return PERIOD_H1;
+   else if(tf_minutes <= 240) return PERIOD_H4;
+   else return PERIOD_D1;
+}
 
 bool SendPostRequest(string url, string jsonPayload, string &response);
 bool SendGetRequest(string url, string &response);
@@ -24,6 +38,9 @@ string ExtractJsonValue(string json, string key);
 string Trim(string value);
 void ReportMarket();
 void ReportSymbolInfo();
+void ReportSymbolInfoFor(string symbol);
+void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf);
+void ReportAccount();
 
 int OnInit()
 {
@@ -45,7 +62,21 @@ void OnTimer()
    static datetime lastSymbolInfoReport = 0;
    if(TimeCurrent() - lastSymbolInfoReport >= 10)
    {
-      ReportSymbolInfo();
+       ReportSymbolInfo();
+       if(armedSymbol != "" && armedSymbol != _Symbol)
+       {
+          ReportSymbolInfoFor(armedSymbol);
+          ReportCandleFor(armedSymbol, _PeriodToTf(armedTfMinutes));
+       }
+      string reqSym = ea_requested_symbol;
+      if(reqSym != "" && reqSym != _Symbol && reqSym != armedSymbol)
+      {
+         if(SymbolSelect(reqSym, true))
+         {
+            ReportSymbolInfoFor(reqSym);
+            ReportCandleFor(reqSym, _PeriodToTf(armedTfMinutes));
+         }
+      }
       lastSymbolInfoReport = TimeCurrent();
    }
 
@@ -63,7 +94,8 @@ void OnTimer()
       return;
    }
 
-   string url = FlaskURL + "/api/ea/pending?symbol=" + _Symbol + "&trade_id=" + UrlEncode(trackedTradeId);
+    string eaSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
+    string url = FlaskURL + "/api/ea/pending?symbol=" + eaSymbol + "&trade_id=" + UrlEncode(trackedTradeId);
    string response;
    bool ok = SendGetRequest(url, response);
 
@@ -84,11 +116,30 @@ void OnTimer()
       return;
    }
 
-   string tradeId = Trim(ExtractJsonValue(response, "trade_id"));
-   string status = Trim(ExtractJsonValue(response, "status"));
+    string tradeId = Trim(ExtractJsonValue(response, "trade_id"));
+    string status = Trim(ExtractJsonValue(response, "status"));
+    string requestedSymbol = Trim(ExtractJsonValue(response, "requested_symbol"));
 
-   if(tradeId == "" || status == "")
-      return;
+    if(requestedSymbol != "")
+       ea_requested_symbol = requestedSymbol;
+
+    string targetSymbol = Trim(ExtractJsonValue(response, "target_symbol"));
+    string tradeSymbol = Trim(ExtractJsonValue(response, "symbol"));
+
+    if(tradeId == "" || status == "")
+       return;
+
+    if(targetSymbol != "" && targetSymbol != _Symbol)
+    {
+       if(!SymbolSelect(targetSymbol, true))
+       {
+          Print("WARNING: Failed to select ", targetSymbol, " in Market Watch");
+       }
+       else
+       {
+          ReportSymbolInfoFor(targetSymbol);
+       }
+    }
 
    if(trackedTradeId != tradeId && status == "armed")
    {
@@ -169,7 +220,9 @@ void OnTimer()
 
       currentState = STATE_ARMED;
       armedTime = TimeCurrent();
-      armedBarTime = iTime(_Symbol, _Period, 0);
+      armedSymbol = (targetSymbol != "" ? targetSymbol : _Symbol);
+      armedTfMinutes = tf_minutes;
+      armedBarTime = iTime(armedSymbol, _PeriodToTf(tf_minutes), 0);
 
       Print("======================================");
       Print("TRADE ARMED");
@@ -180,12 +233,12 @@ void OnTimer()
       Print("======================================");
    }
 
-   if(currentState == STATE_ARMED && candleCloseTime > 0)
-   {
-      datetime now = TimeCurrent();
-      datetime currentBarTime = iTime(_Symbol, _Period, 0);
-      bool barChanged = (currentBarTime != armedBarTime);
-      bool timeReached = (now >= candleCloseTime);
+    if(currentState == STATE_ARMED && candleCloseTime > 0)
+    {
+       datetime now = TimeCurrent();
+       datetime currentBarTime = iTime(armedSymbol, _PeriodToTf(armedTfMinutes), 0);
+       bool barChanged = (currentBarTime != armedBarTime);
+       bool timeReached = (now >= candleCloseTime);
 
       PrintFormat("CHECK tradeId=%s state=%d barChanged=%s timeReached=%s currentBarTime=%d armedBarTime=%d now=%d close=%d", trackedTradeId, currentState, barChanged ? "Y" : "N", timeReached ? "Y" : "N", currentBarTime, armedBarTime, now, candleCloseTime);
 
@@ -211,11 +264,12 @@ void ExecuteTrade()
 
    pendingTradeId = Trim(pendingTradeId);
 
-   string url;
-   if(TEST_MODE)
-   {
-      string encodedId = UrlEncode(pendingTradeId);
-      url = FlaskURL + "/api/execute_trade?trade_id=" + encodedId + "&test_mode=1&symbol=" + _Symbol + "&direction=" + pendingDirection;
+    string url;
+    if(TEST_MODE)
+    {
+       string encodedId = UrlEncode(pendingTradeId);
+       string execSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
+       url = FlaskURL + "/api/execute_trade?trade_id=" + encodedId + "&test_mode=1&symbol=" + execSymbol + "&direction=" + pendingDirection;
    }
    else
    {
@@ -462,8 +516,9 @@ void ReportExecution(string tradeId, string status, string retcode, string comme
    MqlTradeRequest request = {};
    MqlTradeResult result = {};
    
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    string execSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
+    double bid = SymbolInfoDouble(execSymbol, SYMBOL_BID);
+    double ask = SymbolInfoDouble(execSymbol, SYMBOL_ASK);
    double entry = (_Period == 0) ? ask : (pendingDirection == "BUY" ? ask : bid);
    
    string payload = StringFormat(
@@ -480,7 +535,8 @@ void ReportPosition()
 {
    if(trackedTradeId == "") return;
    
-   if(PositionSelect(_Symbol))
+    string posSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
+    if(PositionSelect(posSymbol))
    {
       double volume = PositionGetDouble(POSITION_VOLUME);
       double price = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -541,7 +597,16 @@ void ReportMarket()
 
 void ReportSymbolInfo()
 {
-   string symbol = _Symbol;
+   ReportSymbolInfoFor(_Symbol);
+}
+
+void ReportSymbolInfoFor(string symbol)
+{
+   if(symbol == "" || !SymbolSelect(symbol, false))
+   {
+      Print("ReportSymbolInfoFor: symbol '", symbol, "' not available");
+      return;
+   }
 
    long   digits       = SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    double point        = SymbolInfoDouble(symbol, SYMBOL_POINT);
@@ -566,6 +631,39 @@ void ReportSymbolInfo()
    );
 
    string response;
-   string url = FlaskURL + "/api/ea/report_symbol_info";
+     string url = FlaskURL + "/api/ea/report_symbol_info";
+     SendPostRequest(url, payload, response);
+}
+
+void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf)
+{
+   if(symbol == "" || tf == 0)
+      return;
+
+   datetime t = iTime(symbol, tf, 0);
+   if(t == 0)
+      return;
+
+   double o = iOpen(symbol, tf, 0);
+   double h = iHigh(symbol, tf, 0);
+   double l = iLow(symbol, tf, 0);
+   double c = iClose(symbol, tf, 0);
+   long   v = (long)iVolume(symbol, tf, 0);
+
+   string tfName = "M15";
+   if(tf == PERIOD_M1) tfName = "M1";
+   else if(tf == PERIOD_M5) tfName = "M5";
+   else if(tf == PERIOD_M15) tfName = "M15";
+   else if(tf == PERIOD_M30) tfName = "M30";
+   else if(tf == PERIOD_H1) tfName = "H1";
+   else if(tf == PERIOD_H4) tfName = "H4";
+   else if(tf == PERIOD_D1) tfName = "D1";
+
+   string payload = StringFormat(
+      "{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"tick_volume\":%d}",
+      symbol, tfName, (long)t, o, h, l, c, (int)v
+   );
+   string response;
+   string url = FlaskURL + "/api/ea/report_candle";
    SendPostRequest(url, payload, response);
 }
