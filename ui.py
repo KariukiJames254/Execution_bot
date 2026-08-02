@@ -928,6 +928,14 @@ def api_candle_data():
     candle = get_latest_candle(current)
 
     if not candle:
+        import time as _time
+        for _ in range(3):
+            _time.sleep(1.0)
+            candle = get_latest_candle(current)
+            if candle:
+                break
+
+    if not candle:
         from symbol_store import has_symbol_info
         if not has_symbol_info(current):
             return jsonify({
@@ -950,6 +958,7 @@ def api_candle_data():
 @app.route("/api/price")
 def api_price():
     current = _current_symbol()
+    ea_state["requested_symbol"] = current
     market = ea_state["market"].get(current, {})
     bid = market.get("bid")
     ask = market.get("ask")
@@ -958,8 +967,19 @@ def api_price():
             from symbol_store import get_tick
             bid, ask = get_tick(current)
             if bid is None and ask is None:
-                from market import get_current_price
-                bid, ask = get_current_price(current)
+                import time as _time
+                for _ in range(3):
+                    _time.sleep(1.0)
+                    try:
+                        from symbol_store import get_tick as _gt
+                        bid, ask = _gt(current)
+                        if bid is not None:
+                            break
+                    except Exception:
+                        pass
+                if bid is None and ask is None:
+                    from market import get_current_price
+                    bid, ask = get_current_price(current)
         except Exception:
             pass
     return jsonify({"bid": bid, "ask": ask})
