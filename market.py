@@ -165,7 +165,7 @@ def get_latest_candle(symbol, timeframe=None):
 
     row = rates[len(rates) - 1]
     return {
-        "time":         datetime.fromtimestamp(row["time"], tz=timezone.utc),
+        "time": datetime.fromtimestamp(row["time"], tz=timezone.utc),
         "open": row["open"],
         "high": row["high"],
         "low": row["low"],
@@ -202,7 +202,7 @@ def get_previous_candle(symbol, timeframe=None):
         return None
     row = rates[0]
     return {
-        "time":         datetime.fromtimestamp(row["time"], tz=timezone.utc),
+        "time": datetime.fromtimestamp(row["time"], tz=timezone.utc),
         "open": row["open"],
         "high": row["high"],
         "low": row["low"],
