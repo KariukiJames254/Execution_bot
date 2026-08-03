@@ -362,19 +362,31 @@ def get_current_price(symbol):
 
 
 def get_latest_candle(symbol):
-    market = ea_state.get("market", {}).get(symbol, {})
-    bid = market.get("bid")
-    ask = market.get("ask")
-    if bid is None or ask is None:
-        return None
-    now = datetime.now()
-    return {
-        "time": now,
-        "open": (bid + ask) / 2,
-        "high": max(bid, ask),
-        "low": min(bid, ask),
-        "close": (bid + ask) / 2,
-    }
+    from symbol_store import get_candle
+    candle = get_candle(symbol)
+    if candle:
+        import pandas as pd
+        time_val = candle.get("time")
+        try:
+            time_val = pd.to_datetime(float(time_val), unit="s")
+        except (ValueError, TypeError):
+            try:
+                time_val = pd.to_datetime(time_val)
+            except Exception:
+                time_val = pd.to_datetime(0, unit="s")
+        return {
+            "time": time_val,
+            "open": float(candle.get("open", 0)),
+            "high": float(candle.get("high", 0)),
+            "low": float(candle.get("low", 0)),
+            "close": float(candle.get("close", 0)),
+            "tick_volume": candle.get("tick_volume", 0),
+            "spread": candle.get("spread", 0),
+            "real_volume": candle.get("real_volume", 0),
+        }
+
+    from market import get_latest_candle as _market_get_latest_candle
+    return _market_get_latest_candle(symbol)
 
 
 def close_position(ticket):
@@ -393,12 +405,54 @@ def execute_sell(*args, **kwargs):
     return None
 
 
-def validate_min_stop_distance(*args, **kwargs):
+def validate_min_stop_distance(symbol, order_type, entry, sl, tp):
+    info = ea_state.get("symbols", {}).get(symbol)
+    if not info:
+        return True
+    point = float(info.get("point") or 0.00001)
+    stops_level = float(info.get("trade_stops_level", 0) or 0)
+    if stops_level <= 0:
+        return True
+    min_stop = stops_level * point
+    if order_type == _ORDER_TYPE_BUY:
+        sl_dist = entry - sl
+        tp_dist = tp - entry
+    else:
+        sl_dist = sl - entry
+        tp_dist = entry - tp
+    if sl_dist < min_stop:
+        logger.error(f"SL too close for {symbol}: distance={sl_dist:.6f}, min={min_stop:.6f}")
+        return False
+    if tp_dist < min_stop:
+        logger.error(f"TP too close for {symbol}: distance={tp_dist:.6f}, min={min_stop:.6f}")
+        return False
     return True
 
 
-def calculate_lot_from_risk(*args, **kwargs):
-    return 0.01
+def calculate_lot_from_risk(entry_price, sl_price, risk_amount, symbol=None):
+    try:
+        from risk import calculate_lot_from_risk as _calculate_lot_from_risk
+        return _calculate_lot_from_risk(entry_price, sl_price, risk_amount, symbol)
+    except Exception:
+        info = ea_state.get("symbols", {}).get(symbol or _current_symbol())
+        if not info:
+            return 0.01
+        point = float(info.get("point") or 0.00001)
+        tick_value = float(info.get("trade_tick_value") or 0.0)
+        if tick_value <= 0:
+            tick_value = 0.01 * point * 100000
+        sl_distance_points = abs(entry_price - sl_price) / point if point > 0 else 0
+        loss_per_lot = tick_value * sl_distance_points
+        if loss_per_lot <= 0:
+            return 0.01
+        lot_size = risk_amount / loss_per_lot
+        volume_min = float(info.get("volume_min", 0.01) or 0.01)
+        volume_max = float(info.get("volume_max", 100.0) or 100.0)
+        volume_step = float(info.get("volume_step", 0.01) or 0.01)
+        lot_size = round(lot_size / volume_step) * volume_step if volume_step > 0 else round(lot_size, 2)
+        lot_size = max(lot_size, volume_min)
+        lot_size = min(lot_size, volume_max)
+        return round(lot_size, 2)
 
 
 def calculate_sl(*args, **kwargs):
@@ -1405,16 +1459,6 @@ def _api_execute_trade_impl():
             print(f"EXECUTE_TRADE 400: Price moved above candle high bid={bid} ask={ask} sl={sl}")
             return jsonify({"status": "error", "retcode": 0, "comment": "Price moved above candle high. Trade setup invalid."}), 200
 
-    if ENFORCE_MIN_STOP and MIN_STOP_BUFFER_PIPS > 0:
-        min_sl_distance = MIN_STOP_BUFFER_PIPS * point * 10
-        actual_distance = abs(entry - sl)
-        if actual_distance < min_sl_distance:
-            print(f"EXECUTE_TRADE 400: Stop too close {actual_distance / (point * 10):.1f} pips min={MIN_STOP_BUFFER_PIPS}")
-            error_msg = "Trade rejected.\n\nReason:\nThe selected candle results in a stop distance of only %.1f pips.\n\nMinimum allowed: %.1f pips.\n\nPlease select a candle with a larger range." % (actual_distance / (point * 10), MIN_STOP_BUFFER_PIPS)
-            add_log("warn", error_msg.replace("\n", " "))
-            notify(f"❌ <b>Trade Rejected</b>\n{direction} {symbol}\n\nReason:\nStop too close to entry ({actual_distance / (point * 10):.1f} pips).\nMinimum allowed: {MIN_STOP_BUFFER_PIPS} pips.\n\nPlease select a candle with a larger range.")
-            return jsonify({"error": error_msg}), 400
-
     lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
     if lot <= 0:
         print(f"EXECUTE_TRADE 400: Invalid lot calculated lot={lot}")
@@ -1431,10 +1475,52 @@ def _api_execute_trade_impl():
         tp = entry - abs(entry - sl) * rr_ratio
     tp = round(tp, digits)
 
-    order_type = _ORDER_TYPE_BUY if direction == "BUY" else _ORDER_TYPE_SELL
-    if not validate_min_stop_distance(symbol, order_type, entry, sl, tp):
-        print(f"EXECUTE_TRADE 400: Stop distance too small for broker sl={sl} tp={tp} entry={entry}")
-        return jsonify({"status": "error", "retcode": 0, "comment": "Stop distance too small for broker requirements. Select a candle with a larger range."}), 200
+    # Check minimum stop distance before sending the order.
+    # If the stop is too close to the market price, cancel the trade
+    # rather than silently adjusting the stop loss or risking a broker rejection.
+    broker_stops_level = float(info.get("trade_stops_level", 0) or 0)
+    broker_min_dist_price = broker_stops_level * point if broker_stops_level > 0 else 0
+    actual_sl_distance = abs(entry - sl)
+    actual_tp_distance = abs(tp - entry)
+
+    buffer_dist_price = 0.0
+    if ENFORCE_MIN_STOP and MIN_STOP_BUFFER_PIPS > 0:
+        buffer_dist_price = MIN_STOP_BUFFER_PIPS * point * 10
+
+    required_distance = max(broker_min_dist_price, buffer_dist_price)
+
+    if required_distance > 0 and (actual_sl_distance < required_distance or actual_tp_distance < required_distance):
+        actual_dist_points = actual_sl_distance / point if point > 0 else 0
+        broker_min_points = broker_stops_level
+        error_msg = (
+            "Trade cancelled.\n\n"
+            "Reason:\n"
+            "Selected candle stop-loss is too close to the current market price.\n"
+            f"Broker minimum stop distance: {broker_min_points:.0f} points.\n"
+            f"Actual stop distance: {actual_dist_points:.1f} points."
+        )
+        print(f"EXECUTE_TRADE: Stop too close. Broker min={broker_min_points:.0f} pts, "
+              f"Actual={actual_dist_points:.1f} pts, SL={sl}, entry={entry}, TP={tp}")
+        add_log("warn", error_msg.replace("\n", " "))
+        notify(f"❌ <b>Trade Cancelled</b>\n{direction} {symbol}\n\nReason:\nStop too close to market price.\n"
+               f"Broker minimum: {broker_min_points:.0f} points.\n"
+               f"Actual: {actual_dist_points:.1f} points.")
+
+        trade["status"] = "cancelled"
+        trade["error"] = "stop_too_close"
+        trade["cancel_reason"] = error_msg
+
+        return jsonify({
+            "status": "cancelled",
+            "trade_id": trade_id,
+            "symbol": symbol,
+            "direction": direction,
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "lot": lot,
+            "comment": error_msg,
+        }), 200
 
     positions = get_open_positions(symbol)
     if positions is None:
