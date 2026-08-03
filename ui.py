@@ -406,12 +406,137 @@ def _get_risk_amount(data, symbol):
 
 
 
+def _preflight_checks(symbol, data=None):
+    """Run pre-flight validation and return a list of check dicts.
+
+    Each check dict has: name, passed (bool), message (str).
+    Only if ALL checks pass should the trade be armed.
+    """
+    data = data or {}
+    checks = []
+
+    connected = _ea_connected()
+    checks.append({
+        "name": "EA Connected",
+        "passed": connected,
+        "message": "EA heartbeat received" if connected else "EA not responding. Check EA is running on the chart.",
+    })
+
+    account = ea_state.get("account") or {}
+    checks.append({
+        "name": "Account Info Received",
+        "passed": bool(account.get("balance") is not None or account.get("login") is not None),
+        "message": f"Login {account.get('login', 'N/A')}" if account else "No account report from EA.",
+    })
+
+    sym_info = ea_state.get("symbols", {}).get(symbol)
+    checks.append({
+        "name": "Symbol Info Available",
+        "passed": sym_info is not None,
+        "message": f"Digits {sym_info.get('digits')}, Point {sym_info.get('point')}" if sym_info
+                   else f"Symbol info for {symbol} not available. Select it in Market Watch or switch symbols.",
+    })
+
+    from symbol_store import has_symbol_info
+    registered = has_symbol_info(symbol)
+    checks.append({
+        "name": f"{symbol} Registered",
+        "passed": registered,
+        "message": "Registered with broker" if registered else f"Symbol {symbol} not registered. Select in Market Watch.",
+    })
+
+    timeframe = data.get("timeframe", TIMEFRAME)
+    candle = None
+    try:
+        candle = get_latest_candle(symbol)
+    except Exception:
+        candle = None
+    checks.append({
+        "name": "Candle Data Available",
+        "passed": candle is not None and candle.get("high") and candle.get("low"),
+        "message": "Candle fetched" if candle and candle.get("high") and candle.get("low")
+                   else "No candle data. Ensure EA reports candles.",
+    })
+
+    direction = data.get("direction", "BUY")
+    high = float(data.get("high", candle.get("high", 0) if candle else 0))
+    low = float(data.get("low", candle.get("low", 0) if candle else 0))
+    close = float(data.get("close", candle.get("close", 0) if candle else 0))
+    if direction == "BUY":
+        sl = low
+        entry = close
+    else:
+        sl = high
+        entry = close
+    sl_valid = sl != 0 and entry != 0
+    if direction == "BUY":
+        sl_valid = sl_valid and entry > sl
+    else:
+        sl_valid = sl_valid and entry < sl
+    checks.append({
+        "name": "Stop Loss Valid",
+        "passed": sl_valid,
+        "message": f"SL={sl}, Entry={entry}" if sl_valid else f"Invalid SL/entry for {direction}.",
+    })
+
+    point = float(sym_info.get("point") or 0.00001) if sym_info else 0.00001
+    lot = trade_lot = 0.01
+    try:
+        risk_amount = _get_risk_amount(data, symbol)
+        lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
+    except Exception:
+        pass
+    volume_max = float(sym_info.get("volume_max") or 100.0) if sym_info else 100.0
+    if sym_info is not None:
+        sym_info_digits = int(sym_info.get("digits", 5) or 5)
+        tp_dist = abs(entry - sl) * float(data.get("rr_ratio", RR_RATIO))
+        if direction == "BUY":
+            tp = entry + tp_dist
+        else:
+            tp = entry - tp_dist
+        tp_valid = tp != 0
+    else:
+        tp_valid = False
+    checks.append({
+        "name": "Take Profit Valid",
+        "passed": tp_valid if sym_info else False,
+        "message": f"TP={tp:.5f}" if sym_info and tp_valid else "Cannot calculate TP without symbol info.",
+    })
+
+    checks.append({
+        "name": "Lot Size Valid",
+        "passed": 0 < lot <= volume_max,
+        "message": f"Lot={lot:.2f}, Max={volume_max}" if sym_info else "Cannot validate lot without symbol info.",
+    })
+
+    return checks
+
+
+def _preflight_all_passed(checks):
+    return all(c["passed"] for c in checks)
+
+
+@app.route("/api/preflight")
+def api_preflight():
+    symbol = _current_symbol()
+    checks = _preflight_checks(symbol)
+    all_passed = _preflight_all_passed(checks)
+    return jsonify({
+        "symbol": symbol,
+        "all_passed": all_passed,
+        "checks": checks,
+    })
+
+
 def _time_to_close(candle_time_str, timeframe):
     try:
-        candle_time = datetime.fromisoformat(candle_time_str.replace("Z", "+00:00"))
+        candle_time = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
         tf_seconds = TF_SECONDS.get(timeframe.upper(), 900)
         close_time = candle_time + timedelta(seconds=tf_seconds)
-        now = datetime.now(candle_time.tzinfo)
+        if candle_time.tzinfo is not None:
+            now = datetime.now(candle_time.tzinfo)
+        else:
+            now = datetime.now()
         remaining = (close_time - now).total_seconds()
         return max(0, int(remaining))
     except Exception:
@@ -728,7 +853,7 @@ def api_ea_pending():
         candle_close_unix = 0
         if candle_time_str:
             try:
-                ct = datetime.fromisoformat(candle_time_str.replace("Z", "+00:00"))
+                ct = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
                 candle_close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
             except Exception:
                 pass
@@ -757,7 +882,7 @@ def api_ea_pending():
         candle_close_unix = 0
         if candle_time_str:
             try:
-                ct = datetime.fromisoformat(candle_time_str.replace("Z", "+00:00"))
+                ct = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
                 candle_close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
             except Exception:
                 pass
@@ -1149,8 +1274,18 @@ def api_prepare_trade():
         open_ = float(data.get("open", 0))
         candle_time_str = data.get("time", "")
 
-        if not ensure_connected():
-            add_log("warn", "Preparing trade without live MT5 connection; using fallback values")
+        checks = _preflight_checks(symbol, data)
+        if not _preflight_all_passed(checks):
+            failed = [c["name"] for c in checks if not c["passed"]]
+            messages = [f"{c['name']}: {c['message']}" for c in checks if not c["passed"]]
+            error_msg = "Trade not armed. Pre-flight checks failed:\n\n" + "\n".join(messages)
+            add_log("warn", error_msg.replace("\n", " "))
+            notify(f"❌ <b>Trade Not Armed</b>\n{symbol} {direction}\n\n" + "\n".join(messages))
+            return jsonify({
+                "error": error_msg,
+                "preflight": checks,
+                "status": "not_armed",
+            }), 400
 
         if len(_get_open_positions_impl(symbol)) >= MAX_OPEN_POSITIONS:
             return jsonify({"error": "Max positions reached"}), 400
@@ -1273,6 +1408,7 @@ def api_prepare_trade():
             "candle_low": low,
             "candle_close": close,
             "stages": stages,
+            "preflight": checks,
         })
     except Exception as e:
         import traceback

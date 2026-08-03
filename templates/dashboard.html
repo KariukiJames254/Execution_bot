@@ -385,11 +385,17 @@ h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25p
 </div>
 
 <h2>EA Input</h2>
+<div class="card" id="preflight_card" style="display:none;">
+  <h3 style="color:#58a6ff;margin-bottom:10px;font-size:13px;">Pre-Flight Checklist</h3>
+  <ul class="stage-list" id="preflight_list">
+    <li><span class="stage-dot stage-pending">○</span><span>Checking...</span></li>
+  </ul>
+</div>
 <div class="card">
   <p style="color:#8b949e;font-size:13px;margin-bottom:10px;">Highlight a candle in MT5, then arm the trade below. The EA will wait for candle close and execute automatically.</p>
   <div class="form-row" id="ea_buttons">
-    <button class="btn btn-exec" style="background:#238636;" onclick="armTrade('BUY')">🛡 ARM BUY</button>
-    <button class="btn btn-exec" style="background:#da3633;" onclick="armTrade('SELL')">🛡 ARM SELL</button>
+    <button class="btn btn-exec" style="background:#238636;" onclick="armTrade('BUY')" id="arm_buy_btn">🛡 ARM BUY</button>
+    <button class="btn btn-exec" style="background:#da3633;" onclick="armTrade('SELL')" id="arm_sell_btn">🛡 ARM SELL</button>
   </div>
 </div>
 
@@ -502,6 +508,31 @@ function updateSettings() {
   });
 }
 
+function refreshPreflight() {
+  var symbol = getSelectedSymbol();
+  fetch('/api/preflight', {
+    headers: { 'X-Symbol': symbol }
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    var card = document.getElementById('preflight_card');
+    var list = document.getElementById('preflight_list');
+    if (!card || !list) return;
+    if (data.all_passed) {
+      card.style.display = 'none';
+    } else {
+      card.style.display = '';
+      var html = data.checks.map(function(c) {
+        var dotClass = c.passed ? 'stage-done' : 'stage-pending';
+        var dot = c.passed ? '✓' : '○';
+        return '<li><span class="stage-dot ' + dotClass + '">' + dot + '</span><span>' + c.name + ': ' + c.message + '</span></li>';
+      }).join('');
+      list.innerHTML = html;
+    }
+  })
+  .catch(function() {});
+}
+
 function armTrade(direction) {
   console.log('armTrade START', direction);
   var statusEl = document.getElementById('exec_status');
@@ -522,11 +553,36 @@ function armTrade(direction) {
   }
 
   setButtonsDisabled(true);
-  console.log('armTrade buttons disabled, starting fetch');
+  console.log('armTrade buttons disabled, starting preflight check');
 
+  fetch('/api/preflight', {
+    headers: { 'X-Symbol': symbol }
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(preflight) {
+    console.log('preflight response', preflight);
+    if (!preflight.all_passed) {
+      var failed = preflight.checks.filter(function(c) { return !c.passed; });
+      var msg = 'Cannot arm trade. Fix these issues:\n' + failed.map(function(c) { return c.name + ' — ' + c.message; }).join('\n');
+      updateStatus(msg);
+      notifyUser(msg);
+      setButtonsDisabled(false);
+      return;
+    }
+    updateStatus(direction + ' trade: fetching candle data...');
+    fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode);
+  })
+  .catch(function(err) {
+    console.error('preflight check failed', err);
+    updateStatus('Network error: ' + err.message);
+    setButtonsDisabled(false);
+  });
+}
+
+function fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode) {
   var candleRetryCount = 0;
 
-  function fetchCandleData() {
+  function doFetch() {
     fetch('/api/candle_data', {
       headers: { 'X-Symbol': symbol }
     })
@@ -536,7 +592,7 @@ function armTrade(direction) {
       if (data.error && data.message && data.message.indexOf('not registered') >= 0) {
         if (candleRetryCount < 5) {
           candleRetryCount++;
-          setTimeout(fetchCandleData, 1000);
+          setTimeout(doFetch, 1000);
           return;
         }
       }
@@ -546,7 +602,7 @@ function armTrade(direction) {
         return;
       }
 
-        return fetch('/api/prepare_trade', {
+        fetch('/api/prepare_trade', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -572,6 +628,7 @@ function armTrade(direction) {
           console.log('prepare_trade response', prepData);
           if (prepData.error) {
             updateStatus('Error: ' + prepData.error);
+            notifyUser(prepData.error);
             setButtonsDisabled(false);
             return;
           }
@@ -587,7 +644,7 @@ function armTrade(direction) {
     });
   }
 
-  fetchCandleData();
+  doFetch();
 }
 
 function cancelTrade() {
@@ -654,6 +711,10 @@ function updateStatus(message) {
   if (el) {
     el.innerHTML = message.replace(/\n/g, '<br>');
   }
+}
+
+function notifyUser(message) {
+  alert(message);
 }
 
 function changeHistoryPage(page) {
@@ -786,7 +847,9 @@ function refreshData() {
         ' <button class="btn" style="background:#da3633;color:#fff;padding:2px 8px;font-size:11px;margin-left:8px;" onclick="closePosition(' + p.ticket + ')">Close</button>' +
         '</div>';
     }).join('');
-  });
+   });
+
+  refreshPreflight();
 
   fetch('/api/monitor', { method: 'GET' })
   .then(function(r) { return r.json(); })
