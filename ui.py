@@ -1365,18 +1365,24 @@ def _api_execute_trade_impl():
     timeframe = trade.get("timeframe", TIMEFRAME)
 
     if not ensure_connected():
+        error_msg = "MT5/EA not connected. Check EA status on the chart."
         print(f"EXECUTE_TRADE 400: Not connected")
-        return jsonify({"status": "error", "retcode": 0, "comment": "Not connected"}), 200
+        notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {error_msg}")
+        return jsonify({"status": "error", "retcode": 0, "comment": error_msg}), 200
 
     bid, ask = get_current_price(symbol)
     if not bid or not ask:
+        error_msg = f"Cannot get market price for {symbol}. EA may not have reported data yet."
         print(f"EXECUTE_TRADE 400: No market price bid={bid} ask={ask}")
-        return jsonify({"status": "error", "retcode": 0, "comment": "Could not fetch market price"}), 200
+        notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {error_msg}")
+        return jsonify({"status": "error", "retcode": 0, "comment": error_msg}), 200
 
     info = ea_state.get("symbols", {}).get(symbol)
     if info is None:
+        error_msg = f"Symbol info for {symbol} not available. EA may not have reported yet."
         print(f"EXECUTE_TRADE 400: Symbol info unavailable")
-        return jsonify({"status": "error", "retcode": 0, "comment": "Symbol info unavailable"}), 200
+        notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {error_msg}")
+        return jsonify({"status": "error", "retcode": 0, "comment": error_msg}), 200
     digits = int(info.get("digits", 5) or 5)
     point = float(info.get("point") or 0.00001)
 
@@ -1412,6 +1418,7 @@ def _api_execute_trade_impl():
     lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
     if lot <= 0:
         print(f"EXECUTE_TRADE 400: Invalid lot calculated lot={lot}")
+        notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: Invalid lot size calculated (lot={lot})")
         return jsonify({"status": "error", "retcode": 0, "comment": "Invalid lot size calculated"}), 200
     volume_max = info.get("volume_max")
     if volume_max is not None and lot > volume_max:
@@ -1432,11 +1439,13 @@ def _api_execute_trade_impl():
     positions = get_open_positions(symbol)
     if positions is None:
         print(f"EXECUTE_TRADE 400: Could not fetch positions")
+        notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: Could not fetch positions")
         return jsonify({"status": "error", "retcode": 0, "comment": "Could not fetch positions"}), 200
     if len(positions) >= MAX_OPEN_POSITIONS:
         print(f"EXECUTE_TRADE 400: Max positions reached {len(positions)}")
         pending_trades[trade_id]["status"] = "error"
         pending_trades[trade_id]["error"] = "Max positions reached"
+        notify(f"⚠️ <b>Max Positions Reached</b>\n{trade_id}\n{len(positions)} open positions, limit {MAX_OPEN_POSITIONS}")
         return jsonify({"status": "error", "retcode": 0, "comment": "Max positions reached"}), 200
 
     trade["stages"] = [
