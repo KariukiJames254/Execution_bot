@@ -386,7 +386,7 @@ h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25p
 
 <h2>EA Input</h2>
 <div class="card" id="preflight_card" style="display:none;">
-  <h3 style="color:#58a6ff;margin-bottom:10px;font-size:13px;text-transform:uppercase;">Pre-Flight Checklist</h3>
+  <h3 style="color:#58a6ff;margin-bottom:10px;font-size:13px;">Pre-Flight Checklist</h3>
   <ul class="stage-list" id="preflight_list">
     <li><span class="stage-dot stage-pending">○</span><span>Checking...</span></li>
   </ul>
@@ -523,8 +523,17 @@ function refreshPreflight() {
     } else {
       card.style.display = '';
       var html = data.checks.map(function(c) {
-        var dotClass = c.passed ? 'stage-done' : 'stage-pending';
-        var dot = c.passed ? '✓' : '○';
+        var dotClass, dot;
+        if (c.status === 'passed') {
+          dotClass = 'stage-done';
+          dot = '✓';
+        } else if (c.status === 'waiting') {
+          dotClass = 'stage-active';
+          dot = '⋯';
+        } else {
+          dotClass = 'stage-pending';
+          dot = '✕';
+        }
         return '<li><span class="stage-dot ' + dotClass + '">' + dot + '</span><span>' + c.name + ': ' + c.message + '</span></li>';
       }).join('');
       list.innerHTML = html;
@@ -561,12 +570,17 @@ function armTrade(direction) {
   .then(function(r) { return r.json(); })
   .then(function(preflight) {
     console.log('preflight response', preflight);
-    if (!preflight.all_passed) {
-      var failed = preflight.checks.filter(function(c) { return !c.passed; });
+    if (preflight.has_failures) {
+      var failed = preflight.checks.filter(function(c) { return c.status === 'failed'; });
       var msg = 'Cannot arm trade. Fix these issues:\n' + failed.map(function(c) { return c.name + ' — ' + c.message; }).join('\n');
       updateStatus(msg);
       notifyUser(msg);
       setButtonsDisabled(false);
+      return;
+    }
+    if (!preflight.all_passed && preflight.can_retry) {
+      updateStatus('Waiting for EA to report data... retrying in 2s.');
+      setTimeout(function() { armTrade(direction); }, 2000);
       return;
     }
     updateStatus(direction + ' trade: fetching candle data...');
@@ -602,40 +616,50 @@ function fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode) {
         return;
       }
 
-      fetch('/api/prepare_trade', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Symbol': symbol
-        },
-        body: JSON.stringify({
-          symbol: symbol,
-          direction: direction,
-          timeframe: 'M15',
-          open: data.open,
-          high: data.high,
-          low: data.low,
-          close: data.close,
-          time: data.time,
-          risk_amount: riskAmt,
-          risk_mode: riskMode,
-          rr_ratio: rr,
-          be_rr: beRr,
+        fetch('/api/prepare_trade', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Symbol': symbol
+          },
+          body: JSON.stringify({
+            symbol: symbol,
+            direction: direction,
+            timeframe: 'M15',
+            open: data.open,
+            high: data.high,
+            low: data.low,
+            close: data.close,
+            time: data.time,
+            risk_amount: riskAmt,
+            risk_mode: riskMode,
+            rr_ratio: rr,
+            be_rr: beRr,
+          })
         })
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(prepData) {
-        console.log('prepare_trade response', prepData);
-        if (prepData.error) {
-          updateStatus('Error: ' + prepData.error);
-          notifyUser(prepData.error);
-          setButtonsDisabled(false);
-          return;
-        }
-        pendingDirection = direction;
-        updateStatus(direction + ' trade armed. Waiting for candle close...');
-        window.location.href = '?trade_id=' + prepData.trade_id + '&symbol=' + encodeURIComponent(symbol);
-      });
+        .then(function(r) {
+          if (r.status === 409) {
+            return r.json().then(function(prepData) {
+              updateStatus('Waiting for EA data. Retrying...');
+              setTimeout(function() { fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode); }, 1000);
+              return null;
+            });
+          }
+          return r.json();
+        })
+        .then(function(prepData) {
+          if (prepData === null) return;
+          console.log('prepare_trade response', prepData);
+          if (prepData.error) {
+            updateStatus('Error: ' + prepData.error);
+            notifyUser(prepData.error);
+            setButtonsDisabled(false);
+            return;
+          }
+          pendingDirection = direction;
+          updateStatus(direction + ' trade armed. Waiting for candle close...');
+          window.location.href = '?trade_id=' + prepData.trade_id + '&symbol=' + encodeURIComponent(symbol);
+        });
     })
     .catch(function(err) {
       console.error('armTrade chain failed', err);

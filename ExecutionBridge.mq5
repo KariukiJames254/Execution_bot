@@ -1,25 +1,42 @@
 //+------------------------------------------------------------------+
-//|                     ExecutionBridge.mq5                          |
+//|                     ExecutionBridge.mq5 v4.0                      |
+//|  - Pre-loads all trade params at arm time                         |
+//|  - Executes locally with OrderSend() at candle close              |
+//|  - No Sleep() calls in OnTimer (state-based cleanup)              |
+//|  - Broker-reported filling mode, configurable MagicNumber/Devi    |
+//|  - Break-even via server-sent be_rr/be_trigger                    |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.00"
+#property version   "4.00"
 #property strict
 
-input string FlaskURL   = "http://102.203.116.146:5000";  // VPS UI API endpoint
-input bool   TEST_MODE  = false;
+input string FlaskURL     = "http://102.203.116.146:5000";  // VPS UI API endpoint
+input bool   TEST_MODE    = false;
+input long   MagicNumber  = 123456;   // Configurable magic number
+input int    Deviation    = 10;       // Slippage in points
 
-enum TradeState { STATE_IDLE, STATE_ARMED, STATE_EXECUTED, STATE_CANCELLED, STATE_ERROR };
+enum TradeState { STATE_IDLE, STATE_ARMED, STATE_EXECUTED, STATE_CANCELLED, STATE_ERROR, STATE_DONE };
 TradeState currentState = STATE_IDLE;
 
 string pendingTradeId = "";
 string pendingDirection = "";
+string pendingSymbol = "";
 datetime candleCloseTime = 0;
 string armedSymbol = "";
 int armedTfMinutes = 15;
 string ea_requested_symbol = "";
+datetime lastEaRequestedSymbolTime = 0;
 string trackedTradeId = "";
 datetime armedTime = 0;
 datetime armedBarTime = 0;
+
+double pendingLot = 0;
+double pendingSl = 0;
+double pendingTp = 0;
+double pendingEntry = 0;
+double pendingBeRr = 0;
+double pendingBeTrigger = 0;
+bool breakEvenApplied = false;
 
 ENUM_TIMEFRAMES _PeriodToTf(int tf_minutes)
 {
@@ -36,7 +53,7 @@ bool SendPostRequest(string url, string jsonPayload, string &response);
 bool SendGetRequest(string url, string &response);
 string ExtractJsonValue(string json, string key);
 string Trim(string value);
-void ExecuteTradeByEa(string symbol, string direction, string lotStr, string slStr, string tpStr);
+void ExecuteTradeLocal();
 void ReportMarket();
 void ReportTick(string symbol, double bid, double ask);
 void ReportTickFor(string symbol);
@@ -45,10 +62,33 @@ void ReportSymbolInfo();
 void ReportSymbolInfoFor(string symbol);
 void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf);
 void ReportAccount();
+void ReportExecutionDetailed(string tradeId, string status, int retcode, string comment,
+                             long ticket, long deal, double entry, double slippage, double spread);
+
+void _cleanupTrade()
+{
+   pendingTradeId     = "";
+   pendingDirection   = "";
+   pendingSymbol      = "";
+   pendingLot         = 0;
+   pendingSl          = 0;
+   pendingTp          = 0;
+   pendingEntry       = 0;
+   pendingBeRr        = 0;
+   pendingBeTrigger   = 0;
+   breakEvenApplied   = false;
+   trackedTradeId     = "";
+   candleCloseTime    = 0;
+   armedTime          = 0;
+   armedBarTime       = 0;
+   armedSymbol        = "";
+   armedTfMinutes     = 15;
+   Comment("");
+}
 
 int OnInit()
 {
-   Print("Execution Bridge Started - VPS Reporting v3");
+   Print("Execution Bridge Started v4 - Local Execute, No Sleep, Broker Fill");
    EventSetTimer(1);
    return(INIT_SUCCEEDED);
 }
@@ -63,26 +103,30 @@ void OnTimer()
 {
    ReportMarket();
 
+   // Report symbol info for all relevant symbols every 2 seconds
+   // (was 10s — too slow for the trader changing symbols)
    static datetime lastSymbolInfoReport = 0;
-   if(TimeCurrent() - lastSymbolInfoReport >= 10)
+   if(TimeCurrent() - lastSymbolInfoReport >= 2)
    {
-       ReportSymbolInfo();
-    if(armedSymbol != "" && armedSymbol != _Symbol)
-        {
-           ReportSymbolInfoFor(armedSymbol);
-           ReportCandleFor(armedSymbol, _PeriodToTf(armedTfMinutes));
-           ReportTickFor(armedSymbol);
-        }
-       string reqSym = ea_requested_symbol;
-       if(reqSym != "" && reqSym != _Symbol && reqSym != armedSymbol)
-       {
-          if(SymbolSelect(reqSym, true))
-          {
-             ReportSymbolInfoFor(reqSym);
-             ReportCandleFor(reqSym, _PeriodToTf(armedTfMinutes));
-             ReportTickFor(reqSym);
-          }
-       }
+      ReportSymbolInfo();
+
+      if(armedSymbol != "" && armedSymbol != _Symbol)
+      {
+         ReportSymbolInfoFor(armedSymbol);
+         ReportCandleFor(armedSymbol, _PeriodToTf(armedTfMinutes));
+         ReportTickFor(armedSymbol);
+      }
+
+      string reqSym = ea_requested_symbol;
+      if(reqSym != "" && reqSym != _Symbol && reqSym != armedSymbol)
+      {
+         if(SymbolSelect(reqSym, true))
+         {
+            ReportSymbolInfoFor(reqSym);
+            ReportCandleFor(reqSym, _PeriodToTf(armedTfMinutes));
+            ReportTickFor(reqSym);
+         }
+      }
       lastSymbolInfoReport = TimeCurrent();
    }
 
@@ -93,70 +137,140 @@ void OnTimer()
       lastAccountReport = TimeCurrent();
    }
 
-   if(currentState != STATE_IDLE && currentState != STATE_ARMED)
-   {
-      ReportPosition();
-      ReportAccount();
-      return;
-   }
+    // After execution / cancellation / error: report position + account, then clean up
+    if(currentState != STATE_IDLE && currentState != STATE_ARMED)
+    {
+       ReportPosition();
+       ReportAccount();
 
-    string eaSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
-    string url = FlaskURL + "/api/ea/pending?symbol=" + eaSymbol + "&trade_id=" + UrlEncode(trackedTradeId);
+       // Break-even check (only after successful execution)
+       if(currentState == STATE_EXECUTED && pendingSymbol != "" && pendingBeRr > 0 && pendingBeTrigger > 0)
+       {
+          if(!breakEvenApplied)
+          {
+             if(PositionSelect(pendingSymbol))
+             {
+                double curSl  = PositionGetDouble(POSITION_SL);
+                double curTp  = PositionGetDouble(POSITION_TP);
+                long   beDigits = (long)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS);
+                double triggerPrice = pendingBeTrigger;
+                double currentPrice = (pendingDirection == "BUY")
+                   ? SymbolInfoDouble(pendingSymbol, SYMBOL_BID)
+                   : SymbolInfoDouble(pendingSymbol, SYMBOL_ASK);
+
+                bool reached = false;
+                if(pendingDirection == "BUY" && currentPrice >= triggerPrice)
+                   reached = true;
+                if(pendingDirection == "SELL" && currentPrice <= triggerPrice)
+                   reached = true;
+
+                if(reached && curSl != pendingEntry && curSl != 0)
+                {
+                   double newSl = NormalizeDouble(pendingEntry, (int)beDigits);
+                   double newTp = NormalizeDouble(curTp, (int)beDigits);
+                   MqlTradeRequest modReq = {};
+                   MqlTradeResult modRes = {};
+                   modReq.action = TRADE_ACTION_SLTP;
+                   modReq.symbol = pendingSymbol;
+                   modReq.sl = newSl;
+                   modReq.tp = newTp;
+                   if(!OrderSend(modReq, modRes))
+                      Print("Break-even: OrderSend SLTP failed: ", GetLastError());
+                   else
+                   {
+                      breakEvenApplied = true;
+                      Print("Break-even applied at entry price=", newSl);
+                      Comment("BREAK EVEN\nSL moved to entry");
+                   }
+                }
+             }
+          }
+       }
+
+       // After execution, check if position is still open
+       if(currentState == STATE_EXECUTED)
+       {
+          if(!PositionSelect(pendingSymbol))
+          {
+             currentState = STATE_DONE;
+          }
+       }
+
+       // Transition error / cancelled states to cleanup
+       if(currentState == STATE_ERROR || currentState == STATE_CANCELLED)
+       {
+          currentState = STATE_DONE;
+       }
+
+       if(currentState == STATE_DONE)
+       {
+          _cleanupTrade();
+          currentState = STATE_IDLE;
+       }
+       return;
+    }
+
+   string eaSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
+   string url = FlaskURL + "/api/ea/pending?symbol=" + eaSymbol + "&trade_id=" + UrlEncode(trackedTradeId);
    string response;
    bool ok = SendGetRequest(url, response);
 
    if(!ok)
    {
-      Print("ERROR: Failed to send execution request.");
+      Print("ERROR: Failed to poll Flask /api/ea/pending.");
       currentState = STATE_ERROR;
       Comment("FAILED\nConnection error");
-      Sleep(5000);
-       currentState = STATE_IDLE;
-       pendingTradeId = "";
-       pendingDirection = "";
-       trackedTradeId = "";
-       candleCloseTime = 0;
-       armedTime = 0;
-       armedBarTime = 0;
-       armedSymbol = "";
-       armedTfMinutes = 15;
-       Comment("");
-       return;
-    }
+      _cleanupTrade();
+      currentState = STATE_DONE;
+      return;
+   }
 
-    string tradeId = Trim(ExtractJsonValue(response, "trade_id"));
-    string status = Trim(ExtractJsonValue(response, "status"));
-    string requestedSymbol = Trim(ExtractJsonValue(response, "requested_symbol"));
+   string tradeId       = Trim(ExtractJsonValue(response, "trade_id"));
+   string status        = Trim(ExtractJsonValue(response, "status"));
+   string requestedSymbol = Trim(ExtractJsonValue(response, "requested_symbol"));
 
-    if(requestedSymbol != "")
-       ea_requested_symbol = requestedSymbol;
+   if(requestedSymbol != "" && requestedSymbol != ea_requested_symbol)
+   {
+      ea_requested_symbol = requestedSymbol;
+   }
 
-    string targetSymbol = Trim(ExtractJsonValue(response, "target_symbol"));
-    string tradeSymbol = Trim(ExtractJsonValue(response, "symbol"));
+   string targetSymbol = Trim(ExtractJsonValue(response, "target_symbol"));
+   string tradeSymbol  = Trim(ExtractJsonValue(response, "symbol"));
 
-    if(tradeId == "" || status == "")
-       return;
+   if(tradeId == "" || status == "")
+      return;
 
-    if(targetSymbol != "" && targetSymbol != _Symbol)
-    {
-       if(!SymbolSelect(targetSymbol, true))
-       {
-          Print("WARNING: Failed to select ", targetSymbol, " in Market Watch");
-       }
-       else
-       {
-          ReportSymbolInfoFor(targetSymbol);
-       }
-    }
+   if(targetSymbol != "" && targetSymbol != _Symbol)
+   {
+      if(!SymbolSelect(targetSymbol, true))
+         Print("WARNING: Failed to select ", targetSymbol, " in Market Watch");
+      else
+         ReportSymbolInfoFor(targetSymbol);
+   }
+
+   if(tradeSymbol != "" && tradeSymbol != _Symbol && tradeSymbol != targetSymbol)
+   {
+      if(SymbolSelect(tradeSymbol, true))
+         ReportSymbolInfoFor(tradeSymbol);
+   }
 
    if(trackedTradeId != tradeId && status == "armed")
    {
-      string direction = Trim(ExtractJsonValue(response, "direction"));
+      string direction    = Trim(ExtractJsonValue(response, "direction"));
       string candleTimeStr = Trim(ExtractJsonValue(response, "candle_time"));
-      string timeframe = Trim(ExtractJsonValue(response, "timeframe"));
+      string timeframe    = Trim(ExtractJsonValue(response, "timeframe"));
 
-      trackedTradeId = tradeId;
-      pendingTradeId = tradeId;
+      pendingLot    = StringToDouble(ExtractJsonValue(response, "lot"));
+      pendingSl     = StringToDouble(ExtractJsonValue(response, "sl"));
+      pendingTp     = StringToDouble(ExtractJsonValue(response, "tp"));
+      pendingEntry  = StringToDouble(ExtractJsonValue(response, "entry"));
+      pendingBeRr   = StringToDouble(ExtractJsonValue(response, "be_rr"));
+      pendingBeTrigger = StringToDouble(ExtractJsonValue(response, "be_trigger"));
+      breakEvenApplied = false;
+      pendingSymbol = (targetSymbol != "" ? targetSymbol : tradeSymbol);
+
+      trackedTradeId   = tradeId;
+      pendingTradeId   = tradeId;
       pendingDirection = direction;
 
       int tf_minutes = 15;
@@ -211,8 +325,10 @@ void OnTimer()
                if(remainder == 0 && dt.min == 0)
                   dt.hour += tf_hours;
                else
+               {
                   dt.hour = ((dt.hour / tf_hours) + 1) * tf_hours;
-               dt.min = 0;
+                  dt.min = 0;
+               }
             }
 
             if(dt.min >= 60) { dt.min -= 60; dt.hour++; }
@@ -224,247 +340,245 @@ void OnTimer()
       }
 
       datetime now = TimeCurrent();
-      PrintFormat("ARMED tf=%s now=%d close=%d wait=%d sec candle=%s tradeId=%s candleCloseStr=%s", timeframe, now, candleCloseTime, (int)(candleCloseTime - now), candleTimeStr, tradeId, candleCloseStr);
+      PrintFormat("ARMED tf=%s now=%d close=%d wait=%d sec candle=%s tradeId=%s lot=%.2f SL=%.5f TP=%.5f beRr=%.1f beTrigger=%.1f",
+                  timeframe, now, candleCloseTime, (int)(candleCloseTime - now), candleTimeStr, tradeId,
+                  pendingLot, pendingSl, pendingTp, pendingBeRr, pendingBeTrigger);
 
-      currentState = STATE_ARMED;
-      armedTime = TimeCurrent();
-      armedSymbol = (targetSymbol != "" ? targetSymbol : _Symbol);
+      currentState  = STATE_ARMED;
+      armedTime     = TimeCurrent();
+      armedSymbol   = pendingSymbol;
       armedTfMinutes = tf_minutes;
-      armedBarTime = iTime(armedSymbol, _PeriodToTf(tf_minutes), 0);
+      armedBarTime  = iTime(armedSymbol, _PeriodToTf(tf_minutes), 0);
+
+      if(armedSymbol != "" && armedSymbol != _Symbol)
+         SymbolSelect(armedSymbol, true);
 
       Print("======================================");
-      Print("TRADE ARMED");
+      Print("TRADE ARMED — all params pre-loaded");
       Print("Direction: ", direction);
       Print("Trade ID: ", tradeId);
-      Print("Candle: ", candleTimeStr);
+      Print("Lot: ", pendingLot, " SL: ", pendingSl, " TP: ", pendingTp);
+      Print("BE RR: ", pendingBeRr, " BE Trigger: ", pendingBeTrigger);
       Print("Waiting for candle close...");
       Print("======================================");
    }
 
-    if(currentState == STATE_ARMED && candleCloseTime > 0)
-    {
-       datetime now = TimeCurrent();
-       datetime currentBarTime = iTime(armedSymbol, _PeriodToTf(armedTfMinutes), 0);
-       bool barChanged = (currentBarTime != armedBarTime);
-       bool timeReached = (now >= candleCloseTime);
+   if(currentState == STATE_ARMED && candleCloseTime > 0)
+   {
+      datetime now = TimeCurrent();
+      datetime currentBarTime = iTime(armedSymbol, _PeriodToTf(armedTfMinutes), 0);
+      bool barChanged  = (currentBarTime != armedBarTime);
+      bool timeReached = (now >= candleCloseTime);
 
-      PrintFormat("CHECK tradeId=%s state=%d barChanged=%s timeReached=%s currentBarTime=%d armedBarTime=%d now=%d close=%d", trackedTradeId, currentState, barChanged ? "Y" : "N", timeReached ? "Y" : "N", currentBarTime, armedBarTime, now, candleCloseTime);
+      PrintFormat("CHECK tradeId=%s state=%d barChanged=%s timeReached=%s now=%d close=%d",
+                  trackedTradeId, currentState, barChanged ? "Y" : "N", timeReached ? "Y" : "N", now, candleCloseTime);
 
       if(barChanged || timeReached)
       {
-         Print("EXECUTE: firing ExecuteTrade()");
-         currentState = STATE_EXECUTED;
-         ExecuteTrade();
+         Print("EXECUTE: candle closed — executing OrderSend locally");
+         ExecuteTradeLocal();
       }
       else
       {
          int remaining = (int)(candleCloseTime - now);
-         Comment("ARMED ", pendingDirection, "\n",
-                 "Candle: ", ExtractJsonValue(response, "candle_time"), "\n",
-                 "Closes in: ", remaining, " seconds");
+         Comment("ARMED ", pendingDirection, " ", armedSymbol, "\n",
+                 "Closes in: ", remaining, " seconds\n",
+                 "Lot=", pendingLot, " SL=", pendingSl, " TP=", pendingTp);
       }
-   }
+    }
 }
 
-void ExecuteTrade()
+void ExecuteTradeLocal()
 {
-   if(pendingTradeId == "") return;
+   if(pendingTradeId == "" || pendingSymbol == "")
+      return;
 
    pendingTradeId = Trim(pendingTradeId);
 
-    string url;
-    if(TEST_MODE)
-    {
-       string encodedId = UrlEncode(pendingTradeId);
-       string execSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
-       url = FlaskURL + "/api/execute_trade?trade_id=" + encodedId + "&test_mode=1&symbol=" + execSymbol + "&direction=" + pendingDirection;
+   string execSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
+
+   if(!SymbolSelect(execSymbol, true))
+   {
+      Print("ExecuteTradeLocal: Failed to select symbol ", execSymbol);
+      ReportExecutionDetailed(pendingTradeId, "error", 1, "Failed to select symbol in Market Watch", 0, 0, 0, 0, 0);
+      currentState = STATE_ERROR;
+      Comment("FAILED\nSelect symbol in Market Watch");
+      currentState = STATE_DONE;
+      return;
+   }
+
+   MqlTick tick;
+   if(!SymbolInfoTick(execSymbol, tick) || tick.bid <= 0 || tick.ask <= 0)
+   {
+      Print("ExecuteTradeLocal: No tick data for ", execSymbol);
+      ReportExecutionDetailed(pendingTradeId, "error", 1, "No market data for symbol", 0, 0, 0, 0, 0);
+      currentState = STATE_ERROR;
+      Comment("FAILED\nNo market data");
+      currentState = STATE_DONE;
+      return;
+   }
+
+   MqlTradeRequest request = {};
+   MqlTradeResult result = {};
+
+   long    digits    = (long)SymbolInfoInteger(execSymbol, SYMBOL_DIGITS);
+   double  point     = SymbolInfoDouble(execSymbol, SYMBOL_POINT);
+   long    filling   = SymbolInfoInteger(execSymbol, SYMBOL_FILLING_MODE);
+   double  slLevel   = (double)SymbolInfoInteger(execSymbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+   double  lotStep   = SymbolInfoDouble(execSymbol, SYMBOL_VOLUME_STEP);
+   double  lotMin    = SymbolInfoDouble(execSymbol, SYMBOL_VOLUME_MIN);
+   double  lotMax    = SymbolInfoDouble(execSymbol, SYMBOL_VOLUME_MAX);
+
+   double lot = pendingLot;
+   if(lotStep > 0)
+      lot = MathFloor(lot / lotStep) * lotStep;
+   lot = MathMax(lot, lotMin);
+   lot = MathMin(lot, lotMax);
+
+   double reqSl = pendingSl;
+   double reqTp = pendingTp;
+
+   double minDist = MathMax(slLevel, point * 10);
+   double currentPrice = (pendingDirection == "BUY") ? tick.ask : tick.bid;
+   if(pendingDirection == "BUY")
+   {
+      if(reqSl > currentPrice - minDist)
+         reqSl = NormalizeDouble(currentPrice - minDist, (int)digits);
    }
    else
    {
-      string encodedId = UrlEncode(pendingTradeId);
-      url = FlaskURL + "/api/execute_trade?trade_id=" + encodedId;
+      if(reqTp < currentPrice + minDist)
+         reqTp = NormalizeDouble(currentPrice + minDist, (int)digits);
    }
-   string response;
-   bool ok = SendGetRequest(url, response);
 
-   if(!ok)
+   double execEntry = (pendingDirection == "BUY") ? tick.ask : tick.bid;
+   double slippage = MathAbs(execEntry - pendingEntry);
+   double spread = tick.ask - tick.bid;
+
+   request.action      = TRADE_ACTION_DEAL;
+   request.symbol      = execSymbol;
+   request.volume      = lot;
+   request.sl          = reqSl;
+   request.tp          = reqTp;
+   request.deviation   = Deviation;
+   request.magic       = MagicNumber;
+   request.comment     = "ExecutionBot " + execSymbol + " " + pendingDirection;
+   request.type_time   = ORDER_TIME_GTC;
+   request.type_filling = (ENUM_ORDER_TYPE_FILLING)filling;
+
+   if(pendingDirection == "BUY")
    {
-       Print("ERROR: Failed to send execution request.");
-       currentState = STATE_ERROR;
-       Comment("FAILED\nConnection error");
-       Sleep(5000);
-       currentState = STATE_IDLE;
-        pendingTradeId = "";
-        pendingDirection = "";
-        trackedTradeId = "";
-        candleCloseTime = 0;
-        armedTime = 0;
-        armedBarTime = 0;
-        armedSymbol = "";
-        armedTfMinutes = 15;
-        Comment("");
-        return;
-    }
+      request.type  = ORDER_TYPE_BUY;
+      request.price = tick.ask;
+   }
+   else
+   {
+      request.type  = ORDER_TYPE_SELL;
+      request.price = tick.bid;
+   }
 
-   Print("Execution response: ", response);
+   string commentStr = "ExecutionBot " + execSymbol + " " + pendingDirection;
+   PrintFormat("ExecuteTradeLocal: OrderSend %s %s lot=%.2f SL=%.5f TP=%.5f dev=%d magic=%d fill=%d",
+               execSymbol, pendingDirection, lot, reqSl, reqTp, Deviation, (int)MagicNumber, (int)filling);
 
-    if(StringFind(response, "\"status\":\"executed\"") >= 0)
-    {
-       Print("EXECUTE_SUCCESS");
-       ReportExecution(pendingTradeId, "executed", "0", "OK");
+   datetime execTime = TimeCurrent();
 
-       currentState = STATE_EXECUTED;
-       Comment("EXECUTED\nCheck dashboard for details");
+   if(!OrderSend(request, result))
+   {
+      int err = GetLastError();
+      Print("ExecuteTradeLocal: OrderSend returned false, error=", err);
+      ReportExecutionDetailed(pendingTradeId, "error", err, "OrderSend failed", 0, 0, execEntry, slippage, spread);
+      currentState = STATE_ERROR;
+      Comment("FAILED\nOrderSend failed err=", err);
+      currentState = STATE_DONE;
+      return;
+   }
 
-         Sleep(10000);
-         currentState = STATE_IDLE;
-         pendingTradeId = "";
-         pendingDirection = "";
-         trackedTradeId = "";
-         candleCloseTime = 0;
-         armedTime = 0;
-         armedBarTime = 0;
-         armedSymbol = "";
-         armedTfMinutes = 15;
-         Comment("");
-     }
-     else if(StringFind(response, "\"status\":\"queued\"") >= 0)
-    {
-        Print("EXECUTE_QUEUED - EA will execute");
-        string eaSymbol = ExtractJsonValue(response, "symbol");
-        string eaDirection = ExtractJsonValue(response, "direction");
-        string eaLot = ExtractJsonValue(response, "lot");
-        string eaSl = ExtractJsonValue(response, "sl");
-        string eaTp = ExtractJsonValue(response, "tp");
+   Print("ExecuteTradeLocal: retcode=", result.retcode, " comment=", result.comment,
+         " order=", result.order, " deal=", result.deal);
 
-        if(eaSymbol != "" && eaDirection != "" && eaLot != "" && eaSl != "" && eaTp != "")
-        {
-           if(armedSymbol == "")
-              armedSymbol = eaSymbol;
-           ExecuteTradeByEa(eaSymbol, eaDirection, eaLot, eaSl, eaTp);
-        }
-        else
-        {
-           ReportExecution(pendingTradeId, "queued", "0", "Queued");
-           currentState = STATE_EXECUTED;
-            Comment("QUEUED\nWaiting for broker fill");
-            Sleep(5000);
-            currentState = STATE_IDLE;
-            pendingTradeId = "";
-            pendingDirection = "";
-            trackedTradeId = "";
-            candleCloseTime = 0;
-            armedTime = 0;
-            armedBarTime = 0;
-            armedSymbol = "";
-            armedTfMinutes = 15;
-            Comment("");
-         }
+   if(result.retcode == TRADE_RETCODE_DONE)
+   {
+      ReportExecutionDetailed(pendingTradeId, "executed", (int)result.retcode, "OK",
+                              (long)result.order, (long)result.deal, execEntry, slippage, spread);
+      currentState = STATE_EXECUTED;
+      Comment("EXECUTED\n", commentStr, "\nEntry=", DoubleToString(execEntry, (int)digits),
+              "\nSlippage=", DoubleToString(slippage, (int)digits));
+
+      if(!PositionSelect(execSymbol))
+      {
+         Print("WARNING: No position found after execution");
       }
-     else if(StringFind(response, "\"status\":\"cancelled\"") >= 0)
-     {
-         string cancelComment = ExtractJsonValue(response, "comment");
-         if(cancelComment == "")
-            cancelComment = ExtractJsonValue(response, "error");
-         Print("TRADE_CANCELLED: ", cancelComment);
-         ReportExecution(pendingTradeId, "cancelled", "0", cancelComment);
-         currentState = STATE_CANCELLED;
-         Comment("CANCELLED\n", cancelComment);
-         Sleep(5000);
-         currentState = STATE_IDLE;
-         pendingTradeId = "";
-         pendingDirection = "";
-         trackedTradeId = "";
-         candleCloseTime = 0;
-         armedTime = 0;
-         armedBarTime = 0;
-         armedSymbol = "";
-         armedTfMinutes = 15;
-         Comment("");
-     }
       else
       {
-        string errorCode = ExtractJsonValue(response, "retcode");
-        string errorComment = ExtractJsonValue(response, "comment");
-        if(errorCode == "" && errorComment == "")
-        {
-           errorCode = ExtractJsonValue(response, "error");
-           errorComment = "";
-        }
-
-        Print("ERROR: Execution failed. Code: ", errorCode, " Comment: ", errorComment);
-        ReportExecution(pendingTradeId, "error", errorCode, errorComment);
-        currentState = STATE_ERROR;
-        Comment("FAILED\n", errorComment);
-        Sleep(5000);
-        currentState = STATE_IDLE;
-        pendingTradeId = "";
-        pendingDirection = "";
-        trackedTradeId = "";
-        candleCloseTime = 0;
-        armedTime = 0;
-        armedBarTime = 0;
-        armedSymbol = "";
-        armedTfMinutes = 15;
-        Comment("");
-     }
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+            pendingDirection = "BUY";
+         else
+            pendingDirection = "SELL";
+      }
+   }
+   else
+   {
+      ReportExecutionDetailed(pendingTradeId, "error", (int)result.retcode, result.comment,
+                              (long)result.order, (long)result.deal, execEntry, slippage, spread);
+      currentState = STATE_ERROR;
+      Comment("FAILED\n", result.comment);
+   }
 }
 
 bool SendPostRequest(string url, string jsonPayload, string &response)
 {
     Print("POST: ", url);
-     
-     uchar postData[];
-     int postSize = StringToCharArray(jsonPayload, postData);
-     // WebRequest sends the full array; omit StringToCharArray's trailing NUL
-     // so Flask receives valid JSON rather than JSON followed by a NUL byte.
-     if(postSize > 0)
-        ArrayResize(postData, postSize - 1);
 
-    uchar result[];
-    string headers = "Content-Type: application/json\r\n";
-    string headers_out;
+    uchar postData[];
+    int postSize = StringToCharArray(jsonPayload, postData);
+    if(postSize > 0)
+       ArrayResize(postData, postSize - 1);
 
-    ResetLastError();
-    int res = WebRequest(
-        "POST",
-        url,
-        headers,
-        10000,
-        postData,
-        result,
-        headers_out
-    );
+   uchar result[];
+   string headers = "Content-Type: application/json\r\n";
+   string headers_out;
 
-    int err = GetLastError();
+   ResetLastError();
+   int res = WebRequest(
+       "POST",
+       url,
+       headers,
+       10000,
+       postData,
+       result,
+       headers_out
+   );
 
-    int len = 0;
-    for(int i = 0; i < ArraySize(result); i++)
-    {
-       if(result[i] == 0) break;
-       len++;
-    }
-    response = CharArrayToString(result, 0, len);
+   int err = GetLastError();
 
-    if(res >= 200 && res < 300)
-    {
-       return true;
-    }
+   int len = 0;
+   for(int i = 0; i < ArraySize(result); i++)
+   {
+      if(result[i] == 0) break;
+      len++;
+   }
+   response = CharArrayToString(result, 0, len);
 
-    Print("==============================");
-    Print("URL        : ", url);
-    Print("HTTP Result: ", res);
-    Print("MT5 Error  : ", err);
-    Print("Response   : ", response);
-    Print("==============================");
+   if(res >= 200 && res < 300)
+   {
+      return true;
+   }
 
-    return false;
+   Print("==============================");
+   Print("URL        : ", url);
+   Print("HTTP Result: ", res);
+   Print("MT5 Error  : ", err);
+   Print("Response   : ", response);
+   Print("==============================");
+
+   return false;
 }
 
 bool SendGetRequest(string url, string &response)
 {
     Print("GET: ", url);
-    
+
     uchar empty_data[];
     uchar result[];
     string headers = "";
@@ -508,12 +622,12 @@ bool SendGetRequest(string url, string &response)
 
 string UrlEncode(string value)
 {
-   StringReplace(value, ":", "%3A");
-   StringReplace(value, " ", "%20");
-   StringReplace(value, "+", "%2B");
-   StringReplace(value, "#", "%23");
-   StringReplace(value, "%", "%25");
-   return value;
+    StringReplace(value, ":", "%3A");
+    StringReplace(value, " ", "%20");
+    StringReplace(value, "+", "%2B");
+    StringReplace(value, "#", "%23");
+    StringReplace(value, "%", "%25");
+    return value;
 }
 
 string ExtractJsonValue(string json, string key)
@@ -560,23 +674,21 @@ string Trim(string value)
    return StringSubstr(value, start, end - start + 1);
 }
 
-void ReportExecution(string tradeId, string status, string retcode, string comment)
+void ReportExecutionDetailed(string tradeId, string status, int retcode, string comment,
+                             long ticket, long deal, double entry, double slippage, double spread)
 {
    if(tradeId == "") return;
-   
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
-   
-    string execSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
-    double bid = SymbolInfoDouble(execSymbol, SYMBOL_BID);
-    double ask = SymbolInfoDouble(execSymbol, SYMBOL_ASK);
-   double entry = (_Period == 0) ? ask : (pendingDirection == "BUY" ? ask : bid);
-   
+
+   string execSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
+   long digits = (long)SymbolInfoInteger(execSymbol, SYMBOL_DIGITS);
+
    string payload = StringFormat(
-      "{\"trade_id\":\"%s\",\"status\":\"%s\",\"ticket\":%d,\"deal\":%d,\"entry\":%.5f,\"slippage\":%.5f,\"retcode\":%s,\"comment\":\"%s\"}",
-      tradeId, status, (int)result.order, (int)result.deal, entry, 0.0, retcode, comment
+      "{\"trade_id\":\"%s\",\"status\":\"%s\",\"ticket\":%d,\"deal\":%d,"
+      "\"entry\":%.8f,\"slippage\":%.8f,\"spread\":%.8f,\"retcode\":%d,"
+      "\"comment\":\"%s\"}",
+      tradeId, status, (int)ticket, (int)deal, entry, slippage, spread, retcode, comment
    );
-   
+
    string response;
    string url = FlaskURL + "/api/ea/report_execution";
    SendPostRequest(url, payload, response);
@@ -585,9 +697,9 @@ void ReportExecution(string tradeId, string status, string retcode, string comme
 void ReportPosition()
 {
    if(trackedTradeId == "") return;
-   
-    string posSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
-    if(PositionSelect(posSymbol))
+
+   string posSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
+   if(PositionSelect(posSymbol))
    {
       double volume = PositionGetDouble(POSITION_VOLUME);
       double price = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -598,12 +710,12 @@ void ReportPosition()
       long type = PositionGetInteger(POSITION_TYPE);
       string direction = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
       long ticket = PositionGetInteger(POSITION_TICKET);
-      
+
       string payload = StringFormat(
          "{\"ticket\":%d,\"symbol\":\"%s\",\"direction\":\"%s\",\"lot\":%.2f,\"entry\":%.5f,\"sl\":%.5f,\"tp\":%.5f,\"profit\":%.2f}",
          (int)ticket, symbol, direction, volume, price, sl, tp, profit
       );
-      
+
       string response;
       string url = FlaskURL + "/api/ea/report_position";
       SendPostRequest(url, payload, response);
@@ -616,18 +728,18 @@ void ReportAccount()
     string server = AccountInfoString(ACCOUNT_SERVER);
     string company = AccountInfoString(ACCOUNT_COMPANY);
     double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double profit = AccountInfoDouble(ACCOUNT_PROFIT);
-   double margin = AccountInfoDouble(ACCOUNT_MARGIN);
-   double margin_level = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
-   
+    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double profit = AccountInfoDouble(ACCOUNT_PROFIT);
+    double margin = AccountInfoDouble(ACCOUNT_MARGIN);
+    double margin_level = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+
     string payload = StringFormat(
        "{\"login\":%d,\"server\":\"%s\",\"company\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"profit\":%.2f,\"margin\":%.2f,\"margin_level\":%.2f}",
        (int)login, server, company, balance, equity, profit, margin, margin_level
     );
-   
-   string response;
-   string url = FlaskURL + "/api/ea/report_account";
+
+    string response;
+    string url = FlaskURL + "/api/ea/report_account";
     SendPostRequest(url, payload, response);
 }
 
@@ -722,21 +834,25 @@ void ReportSymbolInfoFor(string symbol)
    long   filling      = SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
    long   visible      = SymbolInfoInteger(symbol, SYMBOL_VISIBLE);
    long   trade_mode   = SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
+   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
 
    string payload = StringFormat(
       "{\"symbol\":\"%s\",\"digits\":%d,\"point\":%.8f,"
       "\"volume_min\":%.2f,\"volume_max\":%.2f,\"volume_step\":%.4f,"
       "\"trade_tick_value\":%.6f,\"trade_stops_level\":%.0f,"
-      "\"filling_mode\":%d,\"visible\":%d,\"trade_mode\":%d}",
+      "\"filling_mode\":%d,\"visible\":%d,\"trade_mode\":%d,"
+      "\"bid\":%.5f,\"ask\":%.5f}",
       symbol, (int)digits, point,
       vol_min, vol_max, vol_step,
       tick_value, stops_level,
-      (int)filling, (int)visible, (int)trade_mode
+      (int)filling, (int)visible, (int)trade_mode,
+      bid, ask
    );
 
    string response;
-     string url = FlaskURL + "/api/ea/report_symbol_info";
-     SendPostRequest(url, payload, response);
+   string url = FlaskURL + "/api/ea/report_symbol_info";
+   SendPostRequest(url, payload, response);
 }
 
 void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf)
@@ -767,123 +883,8 @@ void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf)
       "{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"tick_volume\":%d}",
       symbol, tfName, (long)t, o, h, l, c, (int)v
    );
-    string response;
-    string url = FlaskURL + "/api/ea/report_candle";
-    SendPostRequest(url, payload, response);
+   string response;
+   string url = FlaskURL + "/api/ea/report_candle";
+   SendPostRequest(url, payload, response);
 }
-
-void ExecuteTradeByEa(string symbol, string direction, string lotStr, string slStr, string tpStr)
-{
-    if(!SymbolSelect(symbol, true))
-    {
-        Print("ExecuteTradeByEa: Failed to select symbol ", symbol);
-        ReportExecution(pendingTradeId, "error", "1", "Failed to select symbol in Market Watch");
-        currentState = STATE_ERROR;
-        Comment("FAILED\nSelect symbol in Market Watch");
-        Sleep(5000);
-        currentState = STATE_IDLE;
-        pendingTradeId = "";
-        pendingDirection = "";
-        trackedTradeId = "";
-        candleCloseTime = 0;
-        armedTime = 0;
-        armedBarTime = 0;
-        armedSymbol = "";
-        armedTfMinutes = 15;
-        Comment("");
-        return;
-    }
-
-    double lot = StringToDouble(lotStr);
-    double sl = StringToDouble(slStr);
-    double tp = StringToDouble(tpStr);
-
-    MqlTick tick;
-    if(!SymbolInfoTick(symbol, tick) || tick.bid <= 0 || tick.ask <= 0)
-    {
-        Print("ExecuteTradeByEa: No tick data for ", symbol);
-        ReportExecution(pendingTradeId, "error", "1", "No market data for symbol");
-        currentState = STATE_ERROR;
-        Comment("FAILED\nNo market data");
-        Sleep(5000);
-        currentState = STATE_IDLE;
-        pendingTradeId = "";
-        pendingDirection = "";
-        trackedTradeId = "";
-        candleCloseTime = 0;
-        armedTime = 0;
-        armedBarTime = 0;
-        armedSymbol = "";
-        armedTfMinutes = 15;
-        Comment("");
-        return;
-    }
-
-    MqlTradeRequest request = {};
-    MqlTradeResult result = {};
-
-    request.action = TRADE_ACTION_DEAL;
-    request.symbol = symbol;
-    request.volume = lot;
-    request.sl = sl;
-    request.tp = tp;
-    request.deviation = 10;
-    request.magic = 123456;
-    request.comment = "EA Trade";
-    request.type_time = ORDER_TIME_GTC;
-    request.type_filling = ORDER_FILLING_RETURN;
-
-    if(direction == "BUY")
-    {
-        request.type = ORDER_TYPE_BUY;
-        request.price = tick.ask;
-    }
-    else
-    {
-        request.type = ORDER_TYPE_SELL;
-        request.price = tick.bid;
-    }
-
-    Print("ExecuteTradeByEa: OrderSend ", symbol, " ", direction, " ", lot, " SL=", sl, " TP=", tp);
-
-    if(!OrderSend(request, result))
-    {
-        Print("ExecuteTradeByEa: OrderSend returned false");
-        ReportExecution(pendingTradeId, "error", "1", "OrderSend failed");
-        currentState = STATE_ERROR;
-        Comment("FAILED\nOrderSend failed");
-        Sleep(5000);
-    }
-    else
-    {
-        string retcodeStr = (string)result.retcode;
-        string commentStr = result.comment;
-        Print("ExecuteTradeByEa: retcode=", result.retcode, " comment=", result.comment, " order=", result.order);
-
-        if(result.retcode == TRADE_RETCODE_DONE)
-        {
-            ReportExecution(pendingTradeId, "executed", retcodeStr, "OK");
-            currentState = STATE_EXECUTED;
-            Comment("EXECUTED\nCheck dashboard for details");
-            Sleep(10000);
-        }
-        else
-        {
-            ReportExecution(pendingTradeId, "error", retcodeStr, commentStr);
-            currentState = STATE_ERROR;
-            Comment("FAILED\n", commentStr);
-            Sleep(5000);
-        }
-    }
-
-    currentState = STATE_IDLE;
-    pendingTradeId = "";
-    pendingDirection = "";
-    trackedTradeId = "";
-    candleCloseTime = 0;
-    armedTime = 0;
-    armedBarTime = 0;
-    armedSymbol = "";
-    armedTfMinutes = 15;
-    Comment("");
-}
+//+------------------------------------------------------------------+

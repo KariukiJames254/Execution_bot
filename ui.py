@@ -15,9 +15,65 @@ except Exception:
     mt5 = None
 
 try:
-    from execution import get_open_positions as _execution_get_open_positions
+    from execution import (
+        get_open_positions as _execution_get_open_positions,
+        execute_buy,
+        execute_sell,
+        close_position,
+        set_break_even,
+        validate_min_stop_distance,
+    )
 except Exception:
     _execution_get_open_positions = None
+    execute_buy = execute_sell = None
+    close_position = set_break_even = None
+    validate_min_stop_distance = None
+
+try:
+    from risk import calculate_lot_from_risk, calculate_sl, calculate_tp
+except Exception:
+    def calculate_lot_from_risk(*args, **kwargs):
+        return 0.01
+
+    def calculate_sl(*args, **kwargs):
+        return 0
+
+    def calculate_tp(*args, **kwargs):
+        return 0
+
+try:
+    from market import get_current_price, get_latest_candle
+except Exception:
+    from datetime import datetime as _dt
+
+    def get_current_price(symbol):
+        market = ea_state.get("market", {}).get(symbol, {})
+        return market.get("bid"), market.get("ask")
+
+    def get_latest_candle(symbol):
+        from symbol_store import get_candle
+        candle = get_candle(symbol)
+        if candle:
+            time_val = candle.get("time")
+            if time_val is None:
+                time_val = _dt.fromtimestamp(0)
+            else:
+                try:
+                    time_val = _dt.fromtimestamp(float(time_val))
+                except (ValueError, TypeError):
+                    time_val = _dt.fromtimestamp(0)
+            return {
+                "time": time_val,
+                "open": float(candle.get("open", 0)),
+                "high": float(candle.get("high", 0)),
+                "low": float(candle.get("low", 0)),
+                "close": float(candle.get("close", 0)),
+                "tick_volume": candle.get("tick_volume", 0),
+                "spread": candle.get("spread", 0),
+                "real_volume": candle.get("real_volume", 0),
+            }
+        from market import get_latest_candle as _market_get_latest_candle
+        return _market_get_latest_candle(symbol)
 
 _TRADE_RETCODE_DONE = getattr(mt5, "TRADE_RETCODE_DONE", 0)
 _ORDER_TYPE_BUY = getattr(mt5, "ORDER_TYPE_BUY", 0)
@@ -348,144 +404,17 @@ def _get_risk_amount(data, symbol):
     return risk_amount
 
 
-def get_account_details():
-    conn = _get_db()
-    try:
-        row = conn.execute("SELECT * FROM account_info ORDER BY id DESC LIMIT 1").fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def get_current_price(symbol):
-    try:
-        from symbol_store import get_tick
-        bid, ask = get_tick(symbol)
-        if bid is not None and ask is not None:
-            return bid, ask
-    except Exception:
-        pass
-    try:
-        from market import get_current_price as _market_get_current_price
-        bid, ask = _market_get_current_price(symbol)
-        if bid is not None or ask is not None:
-            return bid, ask
-    except Exception:
-        pass
-    market = ea_state.get("market", {}).get(symbol, {})
-    return market.get("bid"), market.get("ask")
-
-
-def get_latest_candle(symbol):
-    from datetime import datetime as _dt
-    from symbol_store import get_candle
-    candle = get_candle(symbol)
-    if candle:
-        time_val = candle.get("time")
-        if time_val is not None:
-            try:
-                time_val = _dt.fromtimestamp(float(time_val))
-            except (ValueError, TypeError):
-                try:
-                    time_val = _dt.fromtimestamp(time_val)
-                except Exception:
-                    time_val = _dt.fromtimestamp(0)
-        else:
-            time_val = _dt.fromtimestamp(0)
-        return {
-            "time": time_val,
-            "open": float(candle.get("open", 0)),
-            "high": float(candle.get("high", 0)),
-            "low": float(candle.get("low", 0)),
-            "close": float(candle.get("close", 0)),
-            "tick_volume": candle.get("tick_volume", 0),
-            "spread": candle.get("spread", 0),
-            "real_volume": candle.get("real_volume", 0),
-        }
-
-    from market import get_latest_candle as _market_get_latest_candle
-    return _market_get_latest_candle(symbol)
-
-
-def close_position(ticket):
-    return None
-
-
-def set_break_even(ticket, sl=None):
-    return None
-
-
-def execute_buy(*args, **kwargs):
-    return None
-
-
-def execute_sell(*args, **kwargs):
-    return None
-
-
-def validate_min_stop_distance(symbol, order_type, entry, sl, tp):
-    info = ea_state.get("symbols", {}).get(symbol)
-    if not info:
-        return True
-    point = float(info.get("point") or 0.00001)
-    stops_level = float(info.get("trade_stops_level", 0) or 0)
-    if stops_level <= 0:
-        return True
-    min_stop = stops_level * point
-    if order_type == _ORDER_TYPE_BUY:
-        sl_dist = entry - sl
-        tp_dist = tp - entry
-    else:
-        sl_dist = sl - entry
-        tp_dist = entry - tp
-    if sl_dist < min_stop:
-        logger.error(f"SL too close for {symbol}: distance={sl_dist:.6f}, min={min_stop:.6f}")
-        return False
-    if tp_dist < min_stop:
-        logger.error(f"TP too close for {symbol}: distance={tp_dist:.6f}, min={min_stop:.6f}")
-        return False
-    return True
-
-
-def calculate_lot_from_risk(entry_price, sl_price, risk_amount, symbol=None):
-    try:
-        from risk import calculate_lot_from_risk as _calculate_lot_from_risk
-        return _calculate_lot_from_risk(entry_price, sl_price, risk_amount, symbol)
-    except Exception:
-        info = ea_state.get("symbols", {}).get(symbol or _current_symbol())
-        if not info:
-            return 0.01
-        point = float(info.get("point") or 0.00001)
-        tick_value = float(info.get("trade_tick_value") or 0.0)
-        if tick_value <= 0:
-            tick_value = 0.01 * point * 100000
-        sl_distance_points = abs(entry_price - sl_price) / point if point > 0 else 0
-        loss_per_lot = tick_value * sl_distance_points
-        if loss_per_lot <= 0:
-            return 0.01
-        lot_size = risk_amount / loss_per_lot
-        volume_min = float(info.get("volume_min", 0.01) or 0.01)
-        volume_max = float(info.get("volume_max", 100.0) or 100.0)
-        volume_step = float(info.get("volume_step", 0.01) or 0.01)
-        lot_size = round(lot_size / volume_step) * volume_step if volume_step > 0 else round(lot_size, 2)
-        lot_size = max(lot_size, volume_min)
-        lot_size = min(lot_size, volume_max)
-        return round(lot_size, 2)
-
-
-def calculate_sl(*args, **kwargs):
-    return 0
-
-
-def calculate_tp(*args, **kwargs):
-    return 0
 
 
 def _preflight_checks(symbol, data=None):
     """Run pre-flight validation and return a list of check dicts.
 
-    Each check dict has: name, passed (bool), message (str).
-    Only if ALL checks pass should the trade be armed.
+    Each check dict has: name, passed (bool), status ('passed'|'failed'|'waiting'),
+    message (str).
+    - 'passed': hard requirement met, won't change.
+    - 'failed': hard requirement NOT met and won't resolve without user action.
+    - 'waiting': transient — EA is connected but hasn't reported data yet; will resolve
+      once the EA sends the next report.
     """
     data = data or {}
     checks = []
@@ -494,30 +423,30 @@ def _preflight_checks(symbol, data=None):
     checks.append({
         "name": "EA Connected",
         "passed": connected,
+        "status": "passed" if connected else "failed",
         "message": "EA heartbeat received" if connected else "EA not responding. Check EA is running on the chart.",
     })
 
     account = ea_state.get("account") or {}
+    account_ok = bool(account.get("balance") is not None or account.get("login") is not None)
     checks.append({
         "name": "Account Info Received",
-        "passed": bool(account.get("balance") is not None or account.get("login") is not None),
-        "message": f"Login {account.get('login', 'N/A')}" if account else "No account report from EA.",
+        "passed": account_ok,
+        "status": "passed" if account_ok else ("waiting" if connected else "failed"),
+        "message": f"Login {account.get('login', 'N/A')}" if account_ok else "No account report from EA yet.",
     })
 
     sym_info = ea_state.get("symbols", {}).get(symbol)
-    checks.append({
-        "name": "Symbol Info Available",
-        "passed": sym_info is not None,
-        "message": f"Digits {sym_info.get('digits')}, Point {sym_info.get('point')}" if sym_info
-                   else f"Symbol info for {symbol} not available. Select it in Market Watch or switch symbols.",
-    })
-
+    sym_info_ok = sym_info is not None
     from symbol_store import has_symbol_info
-    registered = has_symbol_info(symbol)
+    registered = has_symbol_info(symbol) or (sym_info is not None)
     checks.append({
-        "name": f"{symbol} Registered",
-        "passed": registered,
-        "message": "Registered with broker" if registered else f"Symbol {symbol} not registered. Select in Market Watch.",
+        "name": f"Symbol Info ({symbol})",
+        "passed": sym_info_ok,
+        "status": "passed" if sym_info_ok else ("waiting" if (connected and registered) else "failed"),
+        "message": f"Digits {sym_info.get('digits')}, Point {sym_info.get('point')}" if sym_info
+                   else (f"EA reports {symbol} registered; waiting for symbol details..." if registered
+                         else f"Symbol {symbol} not in Market Watch. Select it in MT5."),
     })
 
     timeframe = data.get("timeframe", TIMEFRAME)
@@ -526,23 +455,28 @@ def _preflight_checks(symbol, data=None):
         candle = get_latest_candle(symbol)
     except Exception:
         candle = None
+    candle_ok = candle is not None and candle.get("high") and candle.get("low")
     checks.append({
         "name": "Candle Data Available",
-        "passed": candle is not None and candle.get("high") and candle.get("low"),
-        "message": "Candle fetched" if candle and candle.get("high") and candle.get("low")
-                   else "No candle data. Ensure EA reports candles.",
+        "passed": candle_ok,
+        "status": "passed" if candle_ok else ("waiting" if connected and sym_info_ok else "failed"),
+        "message": "Candle fetched" if candle_ok else "Waiting for EA to report candle data...",
     })
 
     direction = data.get("direction", "BUY")
     high = float(data.get("high", candle.get("high", 0) if candle else 0))
     low = float(data.get("low", candle.get("low", 0) if candle else 0))
     close = float(data.get("close", candle.get("close", 0) if candle else 0))
-    if direction == "BUY":
-        sl = low
-        entry = close
+    if candle_ok:
+        if direction == "BUY":
+            sl = low
+            entry = close
+        else:
+            sl = high
+            entry = close
     else:
-        sl = high
-        entry = close
+        sl = 0
+        entry = 0
     sl_valid = sl != 0 and entry != 0
     if direction == "BUY":
         sl_valid = sl_valid and entry > sl
@@ -551,17 +485,21 @@ def _preflight_checks(symbol, data=None):
     checks.append({
         "name": "Stop Loss Valid",
         "passed": sl_valid,
-        "message": f"SL={sl}, Entry={entry}" if sl_valid else f"Invalid SL/entry for {direction}.",
+        "status": "passed" if sl_valid else ("waiting" if not candle_ok else "failed"),
+        "message": f"SL={sl}, Entry={entry}" if sl_valid else (f"Waiting for candle data..." if not candle_ok else f"Invalid SL/entry for {direction}."),
     })
 
     point = float(sym_info.get("point") or 0.00001) if sym_info else 0.00001
-    lot = risk_amount = 0.01
-    try:
-        risk_amount = _get_risk_amount(data, symbol)
-        lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
-    except Exception:
-        pass
+    risk_amount = 0.01
+    lot = 0.01
+    if sl_valid:
+        try:
+            risk_amount = _get_risk_amount(data, symbol)
+            lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
+        except Exception:
+            pass
     volume_max = float(sym_info.get("volume_max") or 100.0) if sym_info else 100.0
+    lot_valid = sym_info is not None and 0 < lot <= volume_max
     if sym_info is not None:
         tp_dist = abs(entry - sl) * float(data.get("rr_ratio", RR_RATIO))
         if direction == "BUY":
@@ -570,17 +508,20 @@ def _preflight_checks(symbol, data=None):
             tp = entry - tp_dist
         tp_valid = tp != 0
     else:
+        tp = 0
         tp_valid = False
     checks.append({
         "name": "Take Profit Valid",
-        "passed": tp_valid if sym_info else False,
-        "message": f"TP={tp:.5f}" if sym_info and tp_valid else "Cannot calculate TP without symbol info.",
+        "passed": tp_valid,
+        "status": "passed" if tp_valid else ("waiting" if not sym_info_ok else "failed"),
+        "message": f"TP={tp:.5f}" if tp_valid else "Cannot calculate TP without symbol info.",
     })
 
     checks.append({
         "name": "Lot Size Valid",
-        "passed": 0 < lot <= volume_max,
-        "message": f"Lot={lot:.2f}, Max={volume_max}" if sym_info else "Cannot validate lot without symbol info.",
+        "passed": lot_valid,
+        "status": "passed" if lot_valid else ("waiting" if not sym_info_ok else "failed"),
+        "message": f"Lot={lot:.2f}, Max={volume_max}" if sym_info_ok else "Cannot validate lot without symbol info.",
     })
 
     return checks
@@ -590,14 +531,29 @@ def _preflight_all_passed(checks):
     return all(c["passed"] for c in checks)
 
 
+def _preflight_can_retry(checks):
+    """True if all checks are 'passed' or 'waiting' (i.e., retry might help)."""
+    return all(c["status"] in ("passed", "waiting") for c in checks)
+
+
+def _preflight_has_failures(checks):
+    """True if any check is a hard 'failed' that won't resolve on retry."""
+    return any(c["status"] == "failed" for c in checks)
+
+
 @app.route("/api/preflight")
 def api_preflight():
     symbol = _current_symbol()
+    ea_state["requested_symbol"] = symbol
     checks = _preflight_checks(symbol)
     all_passed = _preflight_all_passed(checks)
+    can_retry = _preflight_can_retry(checks)
+    has_failures = _preflight_has_failures(checks)
     return jsonify({
         "symbol": symbol,
         "all_passed": all_passed,
+        "can_retry": can_retry,
+        "has_failures": has_failures,
         "checks": checks,
     })
 
@@ -932,8 +888,6 @@ def api_ea_pending():
             except Exception:
                 pass
         return jsonify({
-
-
             "trade_id": trade["trade_id"],
             "status": trade["status"],
             "direction": trade["direction"],
@@ -945,6 +899,8 @@ def api_ea_pending():
             "sl": trade.get("sl", 0),
             "tp": trade.get("tp", 0),
             "lot": trade.get("lot", 0),
+            "be_rr": trade.get("be_rr", 0),
+            "be_trigger": trade.get("be_trigger", 0),
             "error": trade.get("error", ""),
         })
 
@@ -977,6 +933,10 @@ def api_ea_pending():
             "sl": trade.get("sl", 0),
             "tp": trade.get("tp", 0),
             "lot": trade.get("lot", 0),
+            "be_rr": trade.get("be_rr", 0),
+            "be_trigger": trade.get("be_trigger", 0),
+            "risk_amount": trade.get("risk_amount", 0),
+            "rr_ratio": trade.get("rr_ratio", 0),
             "error": trade.get("error", ""),
         })
 
@@ -1351,9 +1311,9 @@ def api_prepare_trade():
         candle_time_str = data.get("time", "")
 
         checks = _preflight_checks(symbol, data)
-        if not _preflight_all_passed(checks):
-            failed = [c["name"] for c in checks if not c["passed"]]
-            messages = [f"{c['name']}: {c['message']}" for c in checks if not c["passed"]]
+        if _preflight_has_failures(checks):
+            failed = [c for c in checks if c["status"] == "failed"]
+            messages = [f"{c['name']}: {c['message']}" for c in failed]
             error_msg = "Trade not armed. Pre-flight checks failed:\n\n" + "\n".join(messages)
             add_log("warn", error_msg.replace("\n", " "))
             notify(f"❌ <b>Trade Not Armed</b>\n{symbol} {direction}\n\n" + "\n".join(messages))
@@ -1362,9 +1322,12 @@ def api_prepare_trade():
                 "preflight": checks,
                 "status": "not_armed",
             }), 400
-
-        if not ensure_connected():
-            return jsonify({"error": "Not connected"}), 400
+        if not _preflight_all_passed(checks):
+            return jsonify({
+                "status": "waiting",
+                "preflight": checks,
+                "message": "Waiting for EA to report data. Retrying...",
+            }), 409
 
         if len(_get_open_positions_impl(symbol)) >= MAX_OPEN_POSITIONS:
             return jsonify({"error": "Max positions reached"}), 400
@@ -1379,15 +1342,14 @@ def api_prepare_trade():
         if sl == 0 or entry == 0:
             return jsonify({"error": "Invalid candle data"}), 400
 
-        info = ea_state.get("symbols", {}).get(symbol)
-        if info is None:
-            digits = 5
-            point = 0.00001
-            volume_max = None
-        else:
-            digits = int(info.get("digits", 5) or 5)
-            point = float(info.get("point") or 0.00001)
-            volume_max = info.get("volume_max")
+        sym = ea_state.get("symbols", {}).get(symbol)
+        digits = 5
+        point = 0.00001
+        volume_max = None
+        if sym:
+            digits = int(sym.get("digits", 5) or 5)
+            point = float(sym.get("point") or 0.00001)
+            volume_max = sym.get("volume_max")
 
         entry = round(entry, digits)
         sl = round(sl, digits)
@@ -1463,7 +1425,6 @@ def api_prepare_trade():
             "status": "armed",
             "stages": stages,
             "time_remaining": _time_to_close(candle_time_str, timeframe),
-            "preflight": checks,
         }
 
         add_log("info", f"Prepared {direction} {symbol}: entry={entry}, SL={sl}, TP={tp}, lot={lot}")
@@ -1622,6 +1583,10 @@ def _api_execute_trade_impl():
     lot = trade.get("lot", 0)
     if not lot or lot <= 0:
         lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
+    if lot <= 0:
+        print(f"EXECUTE_TRADE 400: Invalid lot calculated lot={lot}")
+        notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: Invalid lot size calculated (lot={lot})")
+        return jsonify({"status": "error", "retcode": 0, "comment": "Invalid lot size calculated"}), 200
     volume_max = info.get("volume_max")
     if volume_max is not None and lot > volume_max:
         add_log("warn", f"Calculated lot {lot} exceeds broker max {volume_max}. Capping.")
