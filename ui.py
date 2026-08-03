@@ -499,8 +499,8 @@ def _preflight_checks(symbol, data=None):
         except Exception:
             pass
     volume_max = float(sym_info.get("volume_max") or 100.0) if sym_info else 100.0
-    lot_valid = sym_info is not None and 0 < lot <= volume_max
-    if sym_info is not None:
+    lot_valid = sym_info is not None and sl_valid and 0 < lot <= volume_max
+    if sym_info is not None and sl_valid:
         tp_dist = abs(entry - sl) * float(data.get("rr_ratio", RR_RATIO))
         if direction == "BUY":
             tp = entry + tp_dist
@@ -513,15 +513,15 @@ def _preflight_checks(symbol, data=None):
     checks.append({
         "name": "Take Profit Valid",
         "passed": tp_valid,
-        "status": "passed" if tp_valid else ("waiting" if not sym_info_ok else "failed"),
-        "message": f"TP={tp:.5f}" if tp_valid else "Cannot calculate TP without symbol info.",
+        "status": "passed" if tp_valid else ("waiting" if (not sym_info_ok or not sl_valid) else "failed"),
+        "message": f"TP={tp:.5f}" if tp_valid else ("Waiting for candle data to calculate TP..." if not sl_valid else "Cannot calculate TP without symbol info."),
     })
 
     checks.append({
         "name": "Lot Size Valid",
         "passed": lot_valid,
-        "status": "passed" if lot_valid else ("waiting" if not sym_info_ok else "failed"),
-        "message": f"Lot={lot:.2f}, Max={volume_max}" if sym_info_ok else "Cannot validate lot without symbol info.",
+        "status": "passed" if lot_valid else ("waiting" if (not sym_info_ok or not sl_valid) else "failed"),
+        "message": f"Lot={lot:.2f}, Max={volume_max}" if (sym_info_ok and sl_valid) else "Waiting for candle data to calculate lot...",
     })
 
     return checks

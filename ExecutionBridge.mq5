@@ -48,7 +48,6 @@ double pendingBeTrigger = 0;
 bool breakEvenApplied = false;
 
 string lastMarketReport = "";
-datetime lastCandleTime = 0;
 
 void Log(string msg)
 {
@@ -138,9 +137,14 @@ void OnTimer()
     {
         ReportSymbolInfo();
 
+        // Always report current chart symbol's candle so pre-flight can read it
+        ReportCandleFor(_Symbol, _PeriodToTf(armedTfMinutes));
+
         if(armedSymbol != "" && armedSymbol != _Symbol)
         {
             ReportSymbolInfoFor(armedSymbol);
+            ReportCandleFor(armedSymbol, _PeriodToTf(armedTfMinutes));
+            ReportTickFor(armedSymbol);
         }
 
         string reqSym = ea_requested_symbol;
@@ -148,13 +152,13 @@ void OnTimer()
         {
             EnsureSymbol(reqSym);
             ReportSymbolInfoFor(reqSym);
+            ReportCandleFor(reqSym, _PeriodToTf(armedTfMinutes));
             ReportTickFor(reqSym);
         }
 
         // Report symbol info for armed symbol if different from chart
         if(armedSymbol != "" && armedSymbol != _Symbol)
         {
-            ReportCandleFor(armedSymbol, _PeriodToTf(armedTfMinutes));
             ReportTickFor(armedSymbol);
         }
         lastSymbolInfoReport = TimeCurrent();
@@ -865,14 +869,9 @@ void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf)
     if(symbol == "" || tf == 0)
         return;
 
-    datetime curTime = iTime(symbol, tf, 0);
-    if(curTime == 0)
-        return;
-
-    // Only report when a new candle appears
-    if(curTime == lastCandleTime)
-        return;
-    lastCandleTime = curTime;
+    // Always send current and previous candle — no dedup.
+    // The pre-flight check needs current candle data immediately,
+    // not just when a new bar appears.
 
     string tfName = "M15";
     if(tf == PERIOD_M1) tfName = "M1";
