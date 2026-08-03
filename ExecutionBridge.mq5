@@ -40,6 +40,7 @@ void ExecuteTradeByEa(string symbol, string direction, string lotStr, string slS
 void ReportMarket();
 void ReportTick(string symbol, double bid, double ask);
 void ReportTickFor(string symbol);
+void ReportPosition();
 void ReportSymbolInfo();
 void ReportSymbolInfoFor(string symbol);
 void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf);
@@ -110,16 +111,18 @@ void OnTimer()
       currentState = STATE_ERROR;
       Comment("FAILED\nConnection error");
       Sleep(5000);
-      currentState = STATE_IDLE;
-      pendingTradeId = "";
-      pendingDirection = "";
-      trackedTradeId = "";
-      candleCloseTime = 0;
-      armedTime = 0;
-      armedBarTime = 0;
-      Comment("");
-      return;
-   }
+       currentState = STATE_IDLE;
+       pendingTradeId = "";
+       pendingDirection = "";
+       trackedTradeId = "";
+       candleCloseTime = 0;
+       armedTime = 0;
+       armedBarTime = 0;
+       armedSymbol = "";
+       armedTfMinutes = 15;
+       Comment("");
+       return;
+    }
 
     string tradeId = Trim(ExtractJsonValue(response, "trade_id"));
     string status = Trim(ExtractJsonValue(response, "status"));
@@ -291,15 +294,17 @@ void ExecuteTrade()
        Comment("FAILED\nConnection error");
        Sleep(5000);
        currentState = STATE_IDLE;
-       pendingTradeId = "";
-       pendingDirection = "";
-       trackedTradeId = "";
-       candleCloseTime = 0;
-       armedTime = 0;
-       armedBarTime = 0;
-       Comment("");
-       return;
-   }
+        pendingTradeId = "";
+        pendingDirection = "";
+        trackedTradeId = "";
+        candleCloseTime = 0;
+        armedTime = 0;
+        armedBarTime = 0;
+        armedSymbol = "";
+        armedTfMinutes = 15;
+        Comment("");
+        return;
+    }
 
    Print("Execution response: ", response);
 
@@ -311,17 +316,19 @@ void ExecuteTrade()
        currentState = STATE_EXECUTED;
        Comment("EXECUTED\nCheck dashboard for details");
 
-        Sleep(10000);
-        currentState = STATE_IDLE;
-        pendingTradeId = "";
-        pendingDirection = "";
-        trackedTradeId = "";
-        candleCloseTime = 0;
-        armedTime = 0;
-        armedBarTime = 0;
-        Comment("");
-    }
-    else if(StringFind(response, "\"status\":\"queued\"") >= 0)
+         Sleep(10000);
+         currentState = STATE_IDLE;
+         pendingTradeId = "";
+         pendingDirection = "";
+         trackedTradeId = "";
+         candleCloseTime = 0;
+         armedTime = 0;
+         armedBarTime = 0;
+         armedSymbol = "";
+         armedTfMinutes = 15;
+         Comment("");
+     }
+     else if(StringFind(response, "\"status\":\"queued\"") >= 0)
     {
         Print("EXECUTE_QUEUED - EA will execute");
         string eaSymbol = ExtractJsonValue(response, "symbol");
@@ -340,34 +347,67 @@ void ExecuteTrade()
         {
            ReportExecution(pendingTradeId, "queued", "0", "Queued");
            currentState = STATE_EXECUTED;
-           Comment("QUEUED\nWaiting for broker fill");
-           Sleep(5000);
+            Comment("QUEUED\nWaiting for broker fill");
+            Sleep(5000);
+            currentState = STATE_IDLE;
+            pendingTradeId = "";
+            pendingDirection = "";
+            trackedTradeId = "";
+            candleCloseTime = 0;
+            armedTime = 0;
+            armedBarTime = 0;
+            armedSymbol = "";
+            armedTfMinutes = 15;
+            Comment("");
+         }
+      }
+     else if(StringFind(response, "\"status\":\"cancelled\"") >= 0)
+     {
+         string cancelComment = ExtractJsonValue(response, "comment");
+         if(cancelComment == "")
+            cancelComment = ExtractJsonValue(response, "error");
+         Print("TRADE_CANCELLED: ", cancelComment);
+         ReportExecution(pendingTradeId, "cancelled", "0", cancelComment);
+         currentState = STATE_CANCELLED;
+         Comment("CANCELLED\n", cancelComment);
+         Sleep(5000);
+         currentState = STATE_IDLE;
+         pendingTradeId = "";
+         pendingDirection = "";
+         trackedTradeId = "";
+         candleCloseTime = 0;
+         armedTime = 0;
+         armedBarTime = 0;
+         armedSymbol = "";
+         armedTfMinutes = 15;
+         Comment("");
+     }
+      else
+      {
+        string errorCode = ExtractJsonValue(response, "retcode");
+        string errorComment = ExtractJsonValue(response, "comment");
+        if(errorCode == "" && errorComment == "")
+        {
+           errorCode = ExtractJsonValue(response, "error");
+           errorComment = "";
         }
-    }
-    else
-    {
-       string errorCode = ExtractJsonValue(response, "retcode");
-       string errorComment = ExtractJsonValue(response, "comment");
-       if(errorCode == "" && errorComment == "")
-       {
-          errorCode = ExtractJsonValue(response, "error");
-          errorComment = "";
-       }
 
-       Print("ERROR: Execution failed. Code: ", errorCode, " Comment: ", errorComment);
-       ReportExecution(pendingTradeId, "error", errorCode, errorComment);
-       currentState = STATE_ERROR;
-       Comment("FAILED\n", errorComment);
-       Sleep(5000);
-       currentState = STATE_IDLE;
-       pendingTradeId = "";
-       pendingDirection = "";
-       trackedTradeId = "";
-       candleCloseTime = 0;
-       armedTime = 0;
-       armedBarTime = 0;
-       Comment("");
-    }
+        Print("ERROR: Execution failed. Code: ", errorCode, " Comment: ", errorComment);
+        ReportExecution(pendingTradeId, "error", errorCode, errorComment);
+        currentState = STATE_ERROR;
+        Comment("FAILED\n", errorComment);
+        Sleep(5000);
+        currentState = STATE_IDLE;
+        pendingTradeId = "";
+        pendingDirection = "";
+        trackedTradeId = "";
+        candleCloseTime = 0;
+        armedTime = 0;
+        armedBarTime = 0;
+        armedSymbol = "";
+        armedTfMinutes = 15;
+        Comment("");
+     }
 }
 
 bool SendPostRequest(string url, string jsonPayload, string &response)
@@ -748,6 +788,8 @@ void ExecuteTradeByEa(string symbol, string direction, string lotStr, string slS
         candleCloseTime = 0;
         armedTime = 0;
         armedBarTime = 0;
+        armedSymbol = "";
+        armedTfMinutes = 15;
         Comment("");
         return;
     }
@@ -771,6 +813,8 @@ void ExecuteTradeByEa(string symbol, string direction, string lotStr, string slS
         candleCloseTime = 0;
         armedTime = 0;
         armedBarTime = 0;
+        armedSymbol = "";
+        armedTfMinutes = 15;
         Comment("");
         return;
     }
@@ -839,5 +883,7 @@ void ExecuteTradeByEa(string symbol, string direction, string lotStr, string slS
     candleCloseTime = 0;
     armedTime = 0;
     armedBarTime = 0;
+    armedSymbol = "";
+    armedTfMinutes = 15;
     Comment("");
 }

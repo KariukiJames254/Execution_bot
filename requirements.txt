@@ -1,5 +1,4 @@
 MetaTrader5
-pandas
 python-dotenv
 loguru
 python-telegram-bot
