@@ -4,7 +4,7 @@ import sqlite3
 import hmac
 import secrets
 from flask import Flask, render_template, request, jsonify, redirect, session, url_for
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, DASHBOARD_SECRET_KEY
 from logger import setup_logger
 from notifications import notify
@@ -44,7 +44,7 @@ except Exception:
 try:
     from market import get_current_price, get_latest_candle
 except Exception:
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timezone as _tz
 
     def get_current_price(symbol):
         market = ea_state.get("market", {}).get(symbol, {})
@@ -56,12 +56,12 @@ except Exception:
         if candle:
             time_val = candle.get("time")
             if time_val is None:
-                time_val = _dt.fromtimestamp(0)
+                time_val = _dt.fromtimestamp(0, tz=_tz.utc)
             else:
                 try:
-                    time_val = _dt.fromtimestamp(float(time_val))
+                    time_val = _dt.fromtimestamp(float(time_val), tz=_tz.utc)
                 except (ValueError, TypeError):
-                    time_val = _dt.fromtimestamp(0)
+                    time_val = _dt.fromtimestamp(0, tz=_tz.utc)
             return {
                 "time": time_val,
                 "open": float(candle.get("open", 0)),
@@ -409,8 +409,12 @@ def _get_risk_amount(data, symbol):
 def _preflight_checks(symbol, data=None):
     """Run pre-flight validation and return a list of check dicts.
 
-    Each check dict has: name, passed (bool), message (str).
-    Only if ALL checks pass should the trade be armed.
+    Each check dict has: name, passed (bool), status ('passed'|'failed'|'waiting'),
+    message (str).
+    - 'passed': hard requirement met, won't change.
+    - 'failed': hard requirement NOT met and won't resolve without user action.
+    - 'waiting': transient — EA is connected but hasn't reported data yet; will resolve
+      once the EA sends the next report.
     """
     data = data or {}
     checks = []
@@ -419,30 +423,30 @@ def _preflight_checks(symbol, data=None):
     checks.append({
         "name": "EA Connected",
         "passed": connected,
+        "status": "passed" if connected else "failed",
         "message": "EA heartbeat received" if connected else "EA not responding. Check EA is running on the chart.",
     })
 
     account = ea_state.get("account") or {}
+    account_ok = bool(account.get("balance") is not None or account.get("login") is not None)
     checks.append({
         "name": "Account Info Received",
-        "passed": bool(account.get("balance") is not None or account.get("login") is not None),
-        "message": f"Login {account.get('login', 'N/A')}" if account else "No account report from EA.",
+        "passed": account_ok,
+        "status": "passed" if account_ok else ("waiting" if connected else "failed"),
+        "message": f"Login {account.get('login', 'N/A')}" if account_ok else "No account report from EA yet.",
     })
 
     sym_info = ea_state.get("symbols", {}).get(symbol)
-    checks.append({
-        "name": "Symbol Info Available",
-        "passed": sym_info is not None,
-        "message": f"Digits {sym_info.get('digits')}, Point {sym_info.get('point')}" if sym_info
-                   else f"Symbol info for {symbol} not available. Select it in Market Watch or switch symbols.",
-    })
-
+    sym_info_ok = sym_info is not None
     from symbol_store import has_symbol_info
-    registered = has_symbol_info(symbol)
+    registered = has_symbol_info(symbol) or (sym_info is not None)
     checks.append({
-        "name": f"{symbol} Registered",
-        "passed": registered,
-        "message": "Registered with broker" if registered else f"Symbol {symbol} not registered. Select in Market Watch.",
+        "name": f"Symbol Info ({symbol})",
+        "passed": sym_info_ok,
+        "status": "passed" if sym_info_ok else ("waiting" if (connected and registered) else "failed"),
+        "message": f"Digits {sym_info.get('digits')}, Point {sym_info.get('point')}" if sym_info
+                   else (f"EA reports {symbol} registered; waiting for symbol details..." if registered
+                         else f"Symbol {symbol} not in Market Watch. Select it in MT5."),
     })
 
     timeframe = data.get("timeframe", TIMEFRAME)
@@ -451,23 +455,28 @@ def _preflight_checks(symbol, data=None):
         candle = get_latest_candle(symbol)
     except Exception:
         candle = None
+    candle_ok = candle is not None and candle.get("high") and candle.get("low")
     checks.append({
         "name": "Candle Data Available",
-        "passed": candle is not None and candle.get("high") and candle.get("low"),
-        "message": "Candle fetched" if candle and candle.get("high") and candle.get("low")
-                   else "No candle data. Ensure EA reports candles.",
+        "passed": candle_ok,
+        "status": "passed" if candle_ok else ("waiting" if connected and sym_info_ok else "failed"),
+        "message": "Candle fetched" if candle_ok else "Waiting for EA to report candle data...",
     })
 
     direction = data.get("direction", "BUY")
     high = float(data.get("high", candle.get("high", 0) if candle else 0))
     low = float(data.get("low", candle.get("low", 0) if candle else 0))
     close = float(data.get("close", candle.get("close", 0) if candle else 0))
-    if direction == "BUY":
-        sl = low
-        entry = close
+    if candle_ok:
+        if direction == "BUY":
+            sl = low
+            entry = close
+        else:
+            sl = high
+            entry = close
     else:
-        sl = high
-        entry = close
+        sl = 0
+        entry = 0
     sl_valid = sl != 0 and entry != 0
     if direction == "BUY":
         sl_valid = sl_valid and entry > sl
@@ -476,19 +485,22 @@ def _preflight_checks(symbol, data=None):
     checks.append({
         "name": "Stop Loss Valid",
         "passed": sl_valid,
-        "message": f"SL={sl}, Entry={entry}" if sl_valid else f"Invalid SL/entry for {direction}.",
+        "status": "passed" if sl_valid else ("waiting" if not candle_ok else "failed"),
+        "message": f"SL={sl}, Entry={entry}" if sl_valid else (f"Waiting for candle data..." if not candle_ok else f"Invalid SL/entry for {direction}."),
     })
 
     point = float(sym_info.get("point") or 0.00001) if sym_info else 0.00001
-    lot = trade_lot = 0.01
-    try:
-        risk_amount = _get_risk_amount(data, symbol)
-        lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
-    except Exception:
-        pass
+    risk_amount = 0.01
+    lot = 0.01
+    if sl_valid:
+        try:
+            risk_amount = _get_risk_amount(data, symbol)
+            lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
+        except Exception:
+            pass
     volume_max = float(sym_info.get("volume_max") or 100.0) if sym_info else 100.0
-    if sym_info is not None:
-        sym_info_digits = int(sym_info.get("digits", 5) or 5)
+    lot_valid = sym_info is not None and sl_valid and 0 < lot <= volume_max
+    if sym_info is not None and sl_valid:
         tp_dist = abs(entry - sl) * float(data.get("rr_ratio", RR_RATIO))
         if direction == "BUY":
             tp = entry + tp_dist
@@ -496,17 +508,20 @@ def _preflight_checks(symbol, data=None):
             tp = entry - tp_dist
         tp_valid = tp != 0
     else:
+        tp = 0
         tp_valid = False
     checks.append({
         "name": "Take Profit Valid",
-        "passed": tp_valid if sym_info else False,
-        "message": f"TP={tp:.5f}" if sym_info and tp_valid else "Cannot calculate TP without symbol info.",
+        "passed": tp_valid,
+        "status": "passed" if tp_valid else ("waiting" if (not sym_info_ok or not sl_valid) else "failed"),
+        "message": f"TP={tp:.5f}" if tp_valid else ("Waiting for candle data to calculate TP..." if not sl_valid else "Cannot calculate TP without symbol info."),
     })
 
     checks.append({
         "name": "Lot Size Valid",
-        "passed": 0 < lot <= volume_max,
-        "message": f"Lot={lot:.2f}, Max={volume_max}" if sym_info else "Cannot validate lot without symbol info.",
+        "passed": lot_valid,
+        "status": "passed" if lot_valid else ("waiting" if (not sym_info_ok or not sl_valid) else "failed"),
+        "message": f"Lot={lot:.2f}, Max={volume_max}" if (sym_info_ok and sl_valid) else "Waiting for candle data to calculate lot...",
     })
 
     return checks
@@ -516,22 +531,45 @@ def _preflight_all_passed(checks):
     return all(c["passed"] for c in checks)
 
 
+def _preflight_can_retry(checks):
+    """True if all checks are 'passed' or 'waiting' (i.e., retry might help)."""
+    return all(c["status"] in ("passed", "waiting") for c in checks)
+
+
+def _preflight_has_failures(checks):
+    """True if any check is a hard 'failed' that won't resolve on retry."""
+    return any(c["status"] == "failed" for c in checks)
+
+
 @app.route("/api/preflight")
 def api_preflight():
     symbol = _current_symbol()
+    ea_state["requested_symbol"] = symbol
     checks = _preflight_checks(symbol)
     all_passed = _preflight_all_passed(checks)
+    can_retry = _preflight_can_retry(checks)
+    has_failures = _preflight_has_failures(checks)
     return jsonify({
         "symbol": symbol,
         "all_passed": all_passed,
+        "can_retry": can_retry,
+        "has_failures": has_failures,
         "checks": checks,
     })
 
 
 def _time_to_close(candle_time_str, timeframe):
+    """Return seconds until candle close. Handles both ISO datetime strings
+    and Unix timestamp strings."""
+    tf_seconds = TF_SECONDS.get(timeframe.upper(), 900)
+    try:
+        raw = float(candle_time_str)
+        close_unix = int(raw) + tf_seconds
+        return max(0, close_unix - int(datetime.now(timezone.utc).timestamp()))
+    except (ValueError, TypeError):
+        pass
     try:
         candle_time = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
-        tf_seconds = TF_SECONDS.get(timeframe.upper(), 900)
         close_time = candle_time + timedelta(seconds=tf_seconds)
         if candle_time.tzinfo is not None:
             now = datetime.now(candle_time.tzinfo)
@@ -546,8 +584,36 @@ def _time_to_close(candle_time_str, timeframe):
 def _format_countdown(seconds):
     if seconds <= 0:
         return "00:00"
-    m, s = divmod(seconds, 60)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"{h:d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
+
+
+def _compute_candle_close_unix(trade):
+    """Compute candle_close_unix from the raw EA Unix timestamp, bypassing
+    timezone-naive ISO string round-trips that can produce incorrect values."""
+    tf = trade.get("timeframe", TIMEFRAME)
+    tf_seconds = TF_SECONDS.get(tf.upper(), 900)
+    symbol = trade.get("symbol", _current_symbol())
+    try:
+        from symbol_store import get_candle
+        ea_candle = get_candle(symbol, tf)
+        if ea_candle and ea_candle.get("time") is not None:
+            return int(float(ea_candle["time"])) + tf_seconds
+    except Exception:
+        pass
+    candle_time_str = trade.get("candle_time", "")
+    if candle_time_str:
+        try:
+            ct = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
+            if ct.tzinfo is None:
+                ct = ct.replace(tzinfo=timezone.utc)
+            return int((ct + timedelta(seconds=tf_seconds)).timestamp())
+        except Exception:
+            pass
+    return 0
 
 
 @app.route("/")
@@ -847,16 +913,9 @@ def api_ea_pending():
     trade_id = request.args.get("trade_id")
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]
+        candle_close_unix = _compute_candle_close_unix(trade)
         tf = trade.get("timeframe", TIMEFRAME)
-        tf_seconds = TF_SECONDS.get(tf.upper(), 900)
         candle_time_str = trade.get("candle_time", "")
-        candle_close_unix = 0
-        if candle_time_str:
-            try:
-                ct = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
-                candle_close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
-            except Exception:
-                pass
         return jsonify({
             "trade_id": trade["trade_id"],
             "status": trade["status"],
@@ -869,6 +928,8 @@ def api_ea_pending():
             "sl": trade.get("sl", 0),
             "tp": trade.get("tp", 0),
             "lot": trade.get("lot", 0),
+            "be_rr": trade.get("be_rr", 0),
+            "be_trigger": trade.get("be_trigger", 0),
             "error": trade.get("error", ""),
         })
 
@@ -876,16 +937,9 @@ def api_ea_pending():
     if armed:
         latest_id = armed[-1][0]
         trade = armed[-1][1]
+        candle_close_unix = _compute_candle_close_unix(trade)
         tf = trade.get("timeframe", TIMEFRAME)
-        tf_seconds = TF_SECONDS.get(tf.upper(), 900)
         candle_time_str = trade.get("candle_time", "")
-        candle_close_unix = 0
-        if candle_time_str:
-            try:
-                ct = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
-                candle_close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
-            except Exception:
-                pass
         trade_symbol = trade.get("symbol", _current_symbol())
         return jsonify({
             "trade_id": trade["trade_id"],
@@ -901,6 +955,10 @@ def api_ea_pending():
             "sl": trade.get("sl", 0),
             "tp": trade.get("tp", 0),
             "lot": trade.get("lot", 0),
+            "be_rr": trade.get("be_rr", 0),
+            "be_trigger": trade.get("be_trigger", 0),
+            "risk_amount": trade.get("risk_amount", 0),
+            "rr_ratio": trade.get("rr_ratio", 0),
             "error": trade.get("error", ""),
         })
 
@@ -1275,9 +1333,9 @@ def api_prepare_trade():
         candle_time_str = data.get("time", "")
 
         checks = _preflight_checks(symbol, data)
-        if not _preflight_all_passed(checks):
-            failed = [c["name"] for c in checks if not c["passed"]]
-            messages = [f"{c['name']}: {c['message']}" for c in checks if not c["passed"]]
+        if _preflight_has_failures(checks):
+            failed = [c for c in checks if c["status"] == "failed"]
+            messages = [f"{c['name']}: {c['message']}" for c in failed]
             error_msg = "Trade not armed. Pre-flight checks failed:\n\n" + "\n".join(messages)
             add_log("warn", error_msg.replace("\n", " "))
             notify(f"❌ <b>Trade Not Armed</b>\n{symbol} {direction}\n\n" + "\n".join(messages))
@@ -1286,6 +1344,12 @@ def api_prepare_trade():
                 "preflight": checks,
                 "status": "not_armed",
             }), 400
+        if not _preflight_all_passed(checks):
+            return jsonify({
+                "status": "waiting",
+                "preflight": checks,
+                "message": "Waiting for EA to report data. Retrying...",
+            }), 409
 
         if len(_get_open_positions_impl(symbol)) >= MAX_OPEN_POSITIONS:
             return jsonify({"error": "Max positions reached"}), 400
