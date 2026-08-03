@@ -26,7 +26,10 @@ bool SendPostRequest(string url, string jsonPayload, string &response);
 bool SendGetRequest(string url, string &response);
 string ExtractJsonValue(string json, string key);
 string Trim(string value);
+void ExecuteTradeByEa(string symbol, string direction, string lotStr, string slStr, string tpStr);
 void ReportMarket();
+void ReportTick(string symbol, double bid, double ask);
+void ReportTickFor(string symbol);
 void ReportSymbolInfo();
 void ReportSymbolInfoFor(string symbol);
 void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf);
@@ -53,20 +56,22 @@ void OnTimer()
    if(TimeCurrent() - lastSymbolInfoReport >= 10)
    {
        ReportSymbolInfo();
-       if(armedSymbol != "" && armedSymbol != _Symbol)
+        if(armedSymbol != "" && armedSymbol != _Symbol)
+        {
+           ReportSymbolInfoFor(armedSymbol);
+           ReportCandleFor(armedSymbol, _PeriodToTf(armedTfMinutes));
+           ReportTickFor(armedSymbol);
+        }
+       string reqSym = ea_requested_symbol;
+       if(reqSym != "" && reqSym != _Symbol && reqSym != armedSymbol)
        {
-          ReportSymbolInfoFor(armedSymbol);
-          ReportCandleFor(armedSymbol, _PeriodToTf(armedTfMinutes));
+          if(SymbolSelect(reqSym, true))
+          {
+             ReportSymbolInfoFor(reqSym);
+             ReportCandleFor(reqSym, _PeriodToTf(armedTfMinutes));
+             ReportTickFor(reqSym);
+          }
        }
-      string reqSym = ea_requested_symbol;
-      if(reqSym != "" && reqSym != _Symbol && reqSym != armedSymbol)
-      {
-         if(SymbolSelect(reqSym, true))
-         {
-            ReportSymbolInfoFor(reqSym);
-            ReportCandleFor(reqSym, _PeriodToTf(armedTfMinutes));
-         }
-      }
       lastSymbolInfoReport = TimeCurrent();
    }
 
@@ -596,7 +601,7 @@ void ReportMarket()
    string url = FlaskURL + "/api/ea/report_market";
    SendPostRequest(url, payload, response);
 
-   if(armedSymbol != "" && armedSymbol != _Symbol)
+   if(armedSymbol != "" && armedSymbol != _Symbol && armedSymbol != current)
    {
       MqlTick tick2;
       if(SymbolInfoTick(armedSymbol, tick2) && tick2.bid > 0 && tick2.ask > 0)
@@ -606,6 +611,20 @@ void ReportMarket()
             armedSymbol, tick2.bid, tick2.ask
          );
          SendPostRequest(url, payload2, response);
+      }
+   }
+
+   string reqSym = ea_requested_symbol;
+   if(reqSym != "" && reqSym != _Symbol && reqSym != current && reqSym != armedSymbol)
+   {
+      MqlTick tick3;
+      if(SymbolInfoTick(reqSym, tick3) && tick3.bid > 0 && tick3.ask > 0)
+      {
+         string payload3 = StringFormat(
+            "{\"symbol\":\"%s\",\"bid\":%.5f,\"ask\":%.5f}",
+            reqSym, tick3.bid, tick3.ask
+         );
+         SendPostRequest(url, payload3, response);
       }
    }
 }
@@ -691,5 +710,115 @@ ENUM_TIMEFRAMES _PeriodToTf(int tf_minutes)
    else if(tf_minutes <= 30) return PERIOD_M30;
    else if(tf_minutes <= 60) return PERIOD_H1;
    else if(tf_minutes <= 240) return PERIOD_H4;
-   else return PERIOD_D1;
+    else return PERIOD_D1;
+}
+
+void ExecuteTradeByEa(string symbol, string direction, string lotStr, string slStr, string tpStr)
+{
+    if(!SymbolSelect(symbol, true))
+    {
+        Print("ExecuteTradeByEa: Failed to select symbol ", symbol);
+        ReportExecution(pendingTradeId, "error", "1", "Failed to select symbol in Market Watch");
+        currentState = STATE_ERROR;
+        Comment("FAILED\nSelect symbol in Market Watch");
+        Sleep(5000);
+        currentState = STATE_IDLE;
+        pendingTradeId = "";
+        pendingDirection = "";
+        trackedTradeId = "";
+        candleCloseTime = 0;
+        armedTime = 0;
+        armedBarTime = 0;
+        Comment("");
+        return;
+    }
+
+    double lot = StringToDouble(lotStr);
+    double sl = StringToDouble(slStr);
+    double tp = StringToDouble(tpStr);
+
+    MqlTick tick;
+    if(!SymbolInfoTick(symbol, tick) || tick.bid <= 0 || tick.ask <= 0)
+    {
+        Print("ExecuteTradeByEa: No tick data for ", symbol);
+        ReportExecution(pendingTradeId, "error", "1", "No market data for symbol");
+        currentState = STATE_ERROR;
+        Comment("FAILED\nNo market data");
+        Sleep(5000);
+        currentState = STATE_IDLE;
+        pendingTradeId = "";
+        pendingDirection = "";
+        trackedTradeId = "";
+        candleCloseTime = 0;
+        armedTime = 0;
+        armedBarTime = 0;
+        Comment("");
+        return;
+    }
+
+    MqlTradeRequest request = {};
+    MqlTradeResult result = {};
+
+    request.action = TRADE_ACTION_DEAL;
+    request.symbol = symbol;
+    request.volume = lot;
+    request.sl = sl;
+    request.tp = tp;
+    request.deviation = 10;
+    request.magic = 123456;
+    request.comment = "EA Trade";
+    request.type_time = ORDER_TIME_GTC;
+    request.type_filling = ORDER_FILLING_RETURN;
+
+    if(direction == "BUY")
+    {
+        request.type = ORDER_TYPE_BUY;
+        request.price = tick.ask;
+    }
+    else
+    {
+        request.type = ORDER_TYPE_SELL;
+        request.price = tick.bid;
+    }
+
+    Print("ExecuteTradeByEa: OrderSend ", symbol, " ", direction, " ", lot, " SL=", sl, " TP=", tp);
+
+    if(!OrderSend(request, result))
+    {
+        Print("ExecuteTradeByEa: OrderSend returned false");
+        ReportExecution(pendingTradeId, "error", "1", "OrderSend failed");
+        currentState = STATE_ERROR;
+        Comment("FAILED\nOrderSend failed");
+        Sleep(5000);
+    }
+    else
+    {
+        string retcodeStr = (string)result.retcode;
+        string commentStr = result.comment;
+        Print("ExecuteTradeByEa: retcode=", result.retcode, " comment=", result.comment, " order=", result.order);
+
+        if(result.retcode == TRADE_RETCODE_DONE)
+        {
+            ReportExecution(pendingTradeId, "executed", retcodeStr, "OK");
+            currentState = STATE_EXECUTED;
+            Comment("EXECUTED\nCheck dashboard for details");
+            Sleep(10000);
+        }
+        else
+        {
+            ReportExecution(pendingTradeId, "error", retcodeStr, commentStr);
+            currentState = STATE_ERROR;
+            Comment("FAILED\n", commentStr);
+            Sleep(5000);
+        }
+    }
+
+    currentState = STATE_IDLE;
+    pendingTradeId = "";
+    pendingDirection = "";
+    trackedTradeId = "";
+    candleCloseTime = 0;
+    armedTime = 0;
+    armedBarTime = 0;
+    Comment("");
 }

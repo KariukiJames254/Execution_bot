@@ -1466,6 +1466,22 @@ def _api_execute_trade_impl():
     slippage = abs(executed_entry - entry)
 
     from execution import execute_buy, execute_sell
+    if mt5 is None:
+        pending_trades[trade_id]["status"] = "queued"
+        pending_trades[trade_id]["queued_for_ea"] = True
+        add_log("info", f"Trade queued for EA execution: {direction} {lot} {symbol}")
+        notify(f"⏳ <b>Trade Queued for EA Execution</b>\n{direction} {symbol}\nLot: {lot}\nEntry: {entry}\nSL: {sl}\nTP: {tp}")
+        return jsonify({
+            "status": "queued",
+            "symbol": symbol,
+            "direction": direction,
+            "lot": lot,
+            "sl": sl,
+            "tp": tp,
+            "entry": entry,
+            "timeframe": timeframe,
+        }), 202
+
     try:
         if direction == "BUY":
             result = execute_buy(symbol, lot, sl, tp, comment="EA Trade")
@@ -1475,6 +1491,8 @@ def _api_execute_trade_impl():
         pending_trades[trade_id]["status"] = "error"
         pending_trades[trade_id]["error"] = str(e)
         add_log("error", f"Execution exception: {e}")
+        print(f"EXECUTION_FAILED trade_id={trade_id} rc=0 comment={str(e)} result=None")
+        notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {str(e)}")
         return jsonify({"status": "error", "retcode": 0, "comment": str(e)}), 500
 
     if result and result.retcode == _TRADE_RETCODE_DONE:
