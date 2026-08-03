@@ -546,20 +546,6 @@ function armTrade(direction) {
         return;
       }
 
-      return fetch('/api/price', {
-        headers: { 'X-Symbol': symbol }
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(priceData) {
-        console.log('price response', priceData);
-        if (!priceData.bid || !priceData.ask) {
-          updateStatus('Could not fetch market price.');
-          setButtonsDisabled(false);
-          return;
-        }
-
-        var entry = direction === 'BUY' ? priceData.ask : priceData.bid;
-
         return fetch('/api/prepare_trade', {
           method: 'POST',
           headers: {
@@ -593,7 +579,6 @@ function armTrade(direction) {
           updateStatus(direction + ' trade armed. Waiting for candle close...');
           window.location.href = '?trade_id=' + prepData.trade_id + '&symbol=' + encodeURIComponent(symbol);
         });
-      });
     })
     .catch(function(err) {
       console.error('armTrade chain failed', err);

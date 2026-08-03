@@ -358,22 +358,40 @@ def get_account_details():
 
 
 def get_current_price(symbol):
-    return None, None
+    try:
+        from symbol_store import get_tick
+        bid, ask = get_tick(symbol)
+        if bid is not None and ask is not None:
+            return bid, ask
+    except Exception:
+        pass
+    try:
+        from market import get_current_price as _market_get_current_price
+        bid, ask = _market_get_current_price(symbol)
+        if bid is not None or ask is not None:
+            return bid, ask
+    except Exception:
+        pass
+    market = ea_state.get("market", {}).get(symbol, {})
+    return market.get("bid"), market.get("ask")
 
 
 def get_latest_candle(symbol):
+    from datetime import datetime
     from symbol_store import get_candle
     candle = get_candle(symbol)
     if candle:
-        import pandas as pd
         time_val = candle.get("time")
-        try:
-            time_val = pd.to_datetime(float(time_val), unit="s")
-        except (ValueError, TypeError):
+        if time_val is not None:
             try:
-                time_val = pd.to_datetime(time_val)
-            except Exception:
-                time_val = pd.to_datetime(0, unit="s")
+                time_val = _dt.fromtimestamp(float(time_val))
+            except (ValueError, TypeError):
+                try:
+                    time_val = _dt.fromtimestamp(time_val)
+                except Exception:
+                    time_val = _dt.fromtimestamp(0)
+        else:
+            time_val = _dt.fromtimestamp(0)
         return {
             "time": time_val,
             "open": float(candle.get("open", 0)),
@@ -1459,21 +1477,22 @@ def _api_execute_trade_impl():
             print(f"EXECUTE_TRADE 400: Price moved above candle high bid={bid} ask={ask} sl={sl}")
             return jsonify({"status": "error", "retcode": 0, "comment": "Price moved above candle high. Trade setup invalid."}), 200
 
-    lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
-    if lot <= 0:
-        print(f"EXECUTE_TRADE 400: Invalid lot calculated lot={lot}")
-        notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: Invalid lot size calculated (lot={lot})")
-        return jsonify({"status": "error", "retcode": 0, "comment": "Invalid lot size calculated"}), 200
+    # Use pre-calculated lot size from arm time; only recalculate as a fallback.
+    lot = trade.get("lot", 0)
+    if not lot or lot <= 0:
+        lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
     volume_max = info.get("volume_max")
     if volume_max is not None and lot > volume_max:
         add_log("warn", f"Calculated lot {lot} exceeds broker max {volume_max}. Capping.")
         lot = volume_max
 
+    # Calculate TP using the original risk distance (candle close to SL)
+    # so the reward-to-risk ratio stays true to what was calculated at arm time.
+    risk_distance = abs(trade.get("entry", entry) - trade.get("sl", sl))
     if direction == "BUY":
-        tp = entry + abs(entry - sl) * rr_ratio
+        tp = round(entry + risk_distance * rr_ratio, digits)
     else:
-        tp = entry - abs(entry - sl) * rr_ratio
-    tp = round(tp, digits)
+        tp = round(entry - risk_distance * rr_ratio, digits)
 
     # Check minimum stop distance before sending the order.
     # If the stop is too close to the market price, cancel the trade

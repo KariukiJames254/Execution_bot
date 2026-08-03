@@ -1,4 +1,6 @@
-import pandas as pd
+import time
+from datetime import datetime
+
 from logger import setup_logger
 from config import TIMEFRAME
 from symbol_store import symbol_info, get_tick
@@ -90,16 +92,15 @@ def _normalize_ea_candle(candle):
     """Convert EA-reported candle dict to the format get_latest_candle returns."""
     if candle is None:
         return None
-    import pandas as pd
     time_val = candle.get("time")
     if time_val is not None:
         try:
-            time_val = pd.to_datetime(float(time_val), unit="s")
+            time_val = datetime.fromtimestamp(float(time_val))
         except (ValueError, TypeError):
             try:
-                time_val = pd.to_datetime(time_val)
+                time_val = datetime.fromtimestamp(time_val)
             except Exception:
-                time_val = pd.to_datetime(0, unit="s")
+                time_val = datetime.fromtimestamp(0)
     return {
         "time": time_val,
         "open": float(candle.get("open", 0)),
@@ -164,7 +165,7 @@ def get_latest_candle(symbol, timeframe=None):
 
     row = rates[len(rates) - 1]
     return {
-        "time": pd.to_datetime(row["time"], unit="s"),
+        "time": datetime.fromtimestamp(row["time"]),
         "open": row["open"],
         "high": row["high"],
         "low": row["low"],
@@ -201,7 +202,7 @@ def get_previous_candle(symbol, timeframe=None):
         return None
     row = rates[0]
     return {
-        "time": pd.to_datetime(row["time"], unit="s"),
+        "time": datetime.fromtimestamp(row["time"]),
         "open": row["open"],
         "high": row["high"],
         "low": row["low"],
@@ -222,18 +223,30 @@ def get_candles(symbol, timeframe=None, count=100):
 
     if not _ensure_symbol_selected(symbol):
         logger.error(f"Symbol {symbol} not available")
-        return pd.DataFrame()
+        return []
+
+    tf = _resolve_timeframe(timeframe)
 
     def _fetch_candles():
-        return mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+        return mt5.copy_rates_from_pos(symbol, tf, 0, count)
 
     rates = _safe_call(_fetch_candles, on_ipc_reconnect=_fetch_candles)
     if rates is None or len(rates) == 0:
         logger.error(f"Failed to fetch candles for {symbol}")
-        return pd.DataFrame()
-    df = pd.DataFrame(rates)
-    df["time"] = pd.to_datetime(df["time"], unit="s")
-    return df
+        return []
+    candles = []
+    for row in rates:
+        candles.append({
+            "time": datetime.fromtimestamp(row["time"]),
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
+            "close": row["close"],
+            "tick_volume": row["tick_volume"],
+            "spread": row["spread"],
+            "real_volume": row["real_volume"],
+        })
+    return candles
 
 
 def get_symbol_info(symbol):
