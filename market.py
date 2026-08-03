@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from logger import setup_logger
 from config import TIMEFRAME
@@ -95,12 +95,12 @@ def _normalize_ea_candle(candle):
     time_val = candle.get("time")
     if time_val is not None:
         try:
-            time_val = datetime.fromtimestamp(float(time_val))
+             time_val = datetime.fromtimestamp(float(time_val), tz=timezone.utc)
         except (ValueError, TypeError):
             try:
-                time_val = datetime.fromtimestamp(time_val)
+                time_val = datetime.fromtimestamp(time_val, tz=timezone.utc)
             except Exception:
-                time_val = datetime.fromtimestamp(0)
+                time_val = datetime.fromtimestamp(0, tz=timezone.utc)
     return {
         "time": time_val,
         "open": float(candle.get("open", 0)),
@@ -140,7 +140,7 @@ def get_latest_candle(symbol, timeframe=None):
 
     def _fetch_range():
         import datetime as dt
-        end = dt.datetime.now()
+        end = dt.datetime.now(dt.timezone.utc)
         start = end - dt.timedelta(minutes=5)
         return mt5.copy_rates_range(symbol, tf, start, end)
 
@@ -165,7 +165,7 @@ def get_latest_candle(symbol, timeframe=None):
 
     row = rates[len(rates) - 1]
     return {
-        "time": datetime.fromtimestamp(row["time"]),
+        "time":         datetime.fromtimestamp(row["time"], tz=timezone.utc),
         "open": row["open"],
         "high": row["high"],
         "low": row["low"],
@@ -202,7 +202,7 @@ def get_previous_candle(symbol, timeframe=None):
         return None
     row = rates[0]
     return {
-        "time": datetime.fromtimestamp(row["time"]),
+        "time":         datetime.fromtimestamp(row["time"], tz=timezone.utc),
         "open": row["open"],
         "high": row["high"],
         "low": row["low"],
@@ -237,7 +237,7 @@ def get_candles(symbol, timeframe=None, count=100):
     candles = []
     for row in rates:
         candles.append({
-            "time": datetime.fromtimestamp(row["time"]),
+        "time": datetime.fromtimestamp(row["time"], tz=timezone.utc),
             "open": row["open"],
             "high": row["high"],
             "low": row["low"],

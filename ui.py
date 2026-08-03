@@ -4,7 +4,7 @@ import sqlite3
 import hmac
 import secrets
 from flask import Flask, render_template, request, jsonify, redirect, session, url_for
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, DASHBOARD_SECRET_KEY
 from logger import setup_logger
 from notifications import notify
@@ -44,7 +44,7 @@ except Exception:
 try:
     from market import get_current_price, get_latest_candle
 except Exception:
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timezone as _tz
 
     def get_current_price(symbol):
         market = ea_state.get("market", {}).get(symbol, {})
@@ -56,12 +56,12 @@ except Exception:
         if candle:
             time_val = candle.get("time")
             if time_val is None:
-                time_val = _dt.fromtimestamp(0)
+                time_val = _dt.fromtimestamp(0, tz=_tz.utc)
             else:
                 try:
-                    time_val = _dt.fromtimestamp(float(time_val))
+                    time_val = _dt.fromtimestamp(float(time_val), tz=_tz.utc)
                 except (ValueError, TypeError):
-                    time_val = _dt.fromtimestamp(0)
+                    time_val = _dt.fromtimestamp(0, tz=_tz.utc)
             return {
                 "time": time_val,
                 "open": float(candle.get("open", 0)),
@@ -559,9 +559,17 @@ def api_preflight():
 
 
 def _time_to_close(candle_time_str, timeframe):
+    """Return seconds until candle close. Handles both ISO datetime strings
+    and Unix timestamp strings."""
+    tf_seconds = TF_SECONDS.get(timeframe.upper(), 900)
+    try:
+        raw = float(candle_time_str)
+        close_unix = int(raw) + tf_seconds
+        return max(0, close_unix - int(datetime.now(timezone.utc).timestamp()))
+    except (ValueError, TypeError):
+        pass
     try:
         candle_time = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
-        tf_seconds = TF_SECONDS.get(timeframe.upper(), 900)
         close_time = candle_time + timedelta(seconds=tf_seconds)
         if candle_time.tzinfo is not None:
             now = datetime.now(candle_time.tzinfo)
@@ -576,8 +584,36 @@ def _time_to_close(candle_time_str, timeframe):
 def _format_countdown(seconds):
     if seconds <= 0:
         return "00:00"
-    m, s = divmod(seconds, 60)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"{h:d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
+
+
+def _compute_candle_close_unix(trade):
+    """Compute candle_close_unix from the raw EA Unix timestamp, bypassing
+    timezone-naive ISO string round-trips that can produce incorrect values."""
+    tf = trade.get("timeframe", TIMEFRAME)
+    tf_seconds = TF_SECONDS.get(tf.upper(), 900)
+    symbol = trade.get("symbol", _current_symbol())
+    try:
+        from symbol_store import get_candle
+        ea_candle = get_candle(symbol, tf)
+        if ea_candle and ea_candle.get("time") is not None:
+            return int(float(ea_candle["time"])) + tf_seconds
+    except Exception:
+        pass
+    candle_time_str = trade.get("candle_time", "")
+    if candle_time_str:
+        try:
+            ct = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
+            if ct.tzinfo is None:
+                ct = ct.replace(tzinfo=timezone.utc)
+            return int((ct + timedelta(seconds=tf_seconds)).timestamp())
+        except Exception:
+            pass
+    return 0
 
 
 @app.route("/")
@@ -877,16 +913,9 @@ def api_ea_pending():
     trade_id = request.args.get("trade_id")
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]
+        candle_close_unix = _compute_candle_close_unix(trade)
         tf = trade.get("timeframe", TIMEFRAME)
-        tf_seconds = TF_SECONDS.get(tf.upper(), 900)
         candle_time_str = trade.get("candle_time", "")
-        candle_close_unix = 0
-        if candle_time_str:
-            try:
-                ct = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
-                candle_close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
-            except Exception:
-                pass
         return jsonify({
             "trade_id": trade["trade_id"],
             "status": trade["status"],
@@ -908,16 +937,9 @@ def api_ea_pending():
     if armed:
         latest_id = armed[-1][0]
         trade = armed[-1][1]
+        candle_close_unix = _compute_candle_close_unix(trade)
         tf = trade.get("timeframe", TIMEFRAME)
-        tf_seconds = TF_SECONDS.get(tf.upper(), 900)
         candle_time_str = trade.get("candle_time", "")
-        candle_close_unix = 0
-        if candle_time_str:
-            try:
-                ct = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
-                candle_close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
-            except Exception:
-                pass
         trade_symbol = trade.get("symbol", _current_symbol())
         return jsonify({
             "trade_id": trade["trade_id"],

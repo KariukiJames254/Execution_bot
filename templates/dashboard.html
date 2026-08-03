@@ -352,11 +352,11 @@ h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25p
   <div class="calc-grid" style="margin-top:10px;">
     <div class="card">
       <label>Executed Entry</label>
-      <div class="value green" id="exec_entry">{{ '%.5f'|format(pending_trade.executed_entry) }}</div>
+      <div class="value green" id="exec_entry">{{ '%.5f'|format(pending_trade.executed_entry if pending_trade.executed_entry is defined else pending_trade.entry) }}</div>
     </div>
     <div class="card">
       <label>Slippage</label>
-      <div class="value yellow" id="exec_slippage">{{ '%.1f'|format(pending_trade.slippage * 10000) }} pips</div>
+      <div class="value yellow" id="exec_slippage">{{ '%.1f'|format((pending_trade.slippage if pending_trade.slippage is defined else 0) * 10000) }} pips</div>
     </div>
     <div class="card">
       <label>Expected Profit</label>
