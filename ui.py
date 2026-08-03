@@ -404,6 +404,8 @@ def _get_risk_amount(data, symbol):
     return risk_amount
 
 
+
+
 def _time_to_close(candle_time_str, timeframe):
     try:
         candle_time = datetime.fromisoformat(candle_time_str.replace("Z", "+00:00"))
@@ -1403,6 +1405,10 @@ def _api_execute_trade_impl():
     lot = trade.get("lot", 0)
     if not lot or lot <= 0:
         lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
+    if lot <= 0:
+        print(f"EXECUTE_TRADE 400: Invalid lot calculated lot={lot}")
+        notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: Invalid lot size calculated (lot={lot})")
+        return jsonify({"status": "error", "retcode": 0, "comment": "Invalid lot size calculated"}), 200
     volume_max = info.get("volume_max")
     if volume_max is not None and lot > volume_max:
         add_log("warn", f"Calculated lot {lot} exceeds broker max {volume_max}. Capping.")
