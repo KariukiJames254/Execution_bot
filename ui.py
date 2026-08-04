@@ -1193,7 +1193,6 @@ def api_close_position():
     result = close_position(int(ticket))
     if result and result.retcode == _TRADE_RETCODE_DONE:
         add_log("info", f"Closed position ticket={ticket}")
-        notify(f"🔒 <b>Trade Closed</b>\nTicket: {ticket}\nPnL: {pnl}\nClosed at: {close_price}")
 
         closed_at = datetime.now().isoformat()
         close_price = 0.0
@@ -1207,6 +1206,8 @@ def api_close_position():
                     break
         except Exception:
             pass
+
+        notify(f"🔒 <b>Trade Closed</b>\nTicket: {ticket}\nPnL: {pnl}\nClosed at: {close_price}")
 
         try:
             conn = _get_db()
