@@ -633,7 +633,7 @@ void ClosePositionByTicket(long ticket, string symbol)
         for(int i = 0; i < histTotal; i++)
         {
             ulong order = OrderGetTicket(i);
-            if(OrderGetInteger(ORDER_SYMBOL) == symbol && (long)OrderGetInteger(ORDER_TICKET) == ticket)
+            if(OrderGetString(ORDER_SYMBOL) == symbol && (long)OrderGetInteger(ORDER_TICKET) == ticket)
             {
                 posTicket = ticket;
                 posSymbol = symbol;
@@ -666,6 +666,14 @@ void ClosePositionByTicket(long ticket, string symbol)
     request.magic = MagicNumber;
     request.comment = "Close by EA";
     request.type_time = ORDER_TIME_GTC;
+    long fillingMode = SymbolInfoInteger(posSymbol, SYMBOL_FILLING_MODE);
+    ENUM_ORDER_TYPE_FILLING fillMode;
+    if((fillingMode & SYMBOL_FILLING_FOK) != 0)
+        fillMode = ORDER_FILLING_FOK;
+    else if((fillingMode & SYMBOL_FILLING_IOC) != 0)
+        fillMode = ORDER_FILLING_IOC;
+    else
+        fillMode = ORDER_FILLING_RETURN;
     request.type_filling = fillMode;
 
     double closePrice = 0;
