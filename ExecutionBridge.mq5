@@ -80,6 +80,7 @@ bool SendGetRequest(string url, string &response);
 string ExtractJsonValue(string json, string key);
 string Trim(string value);
 void ExecuteTradeLocal();
+void ClosePositionByTicket(long ticket, string symbol);
 void ReportMarket();
 void ReportTick(string symbol, double bid, double ask);
 void ReportTickFor(string symbol);
@@ -219,6 +220,7 @@ void OnTimer()
                     {
                         int beErr = GetLastError();
                         Log("Break-even: OrderSend SLTP failed: " + (string)beErr);
+                    }
                     else
                     {
                         // Verify the SL was actually moved before setting the flag
@@ -291,7 +293,7 @@ void OnTimer()
         // Even if no trade armed, check for close requests
         string closeTicketStr = Trim(ExtractJsonValue(response, "close_ticket"));
         long closeTicket = 0;
-        if(closeTicketStr != "")
+        if(closeTicketStr != "" && closeTicketStr != "0")
             closeTicket = StringToInteger(closeTicketStr);
         if(closeTicket > 0)
         {
@@ -302,20 +304,6 @@ void OnTimer()
             ClosePositionByTicket(closeTicket, closeSymbol);
         }
         return;
-    }
-
-    // Also check for close requests on every poll, regardless of armed state
-    string closeTicketStr = Trim(ExtractJsonValue(response, "close_ticket"));
-    long closeTicket = 0;
-    if(closeTicketStr != "" && closeTicketStr != "0")
-        closeTicket = StringToInteger(closeTicketStr);
-    if(closeTicket > 0)
-    {
-        string closeSymbol = Trim(ExtractJsonValue(response, "close_symbol"));
-        if(closeSymbol == "")
-            closeSymbol = _Symbol;
-        EnsureSymbol(closeSymbol);
-        ClosePositionByTicket(closeTicket, closeSymbol);
     }
 
     if(targetSymbol != "" && targetSymbol != _Symbol)
