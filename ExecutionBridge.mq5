@@ -46,6 +46,7 @@ double pendingEntry = 0;
 double pendingBeRr = 0;
 double pendingBeTrigger = 0;
 bool breakEvenApplied = false;
+datetime lastBeAttemptTime = 0;
 
 string lastMarketReport = "";
 
@@ -181,8 +182,14 @@ void OnTimer()
         if(currentState == STATE_EXECUTED && pendingSymbol != ""
            && pendingBeRr > 0 && pendingBeTrigger > 0 && !breakEvenApplied)
         {
-            if(PositionSelect(pendingSymbol))
+            // Backoff: only retry every 3 seconds to avoid hammering trade context
+            if(TimeCurrent() - lastBeAttemptTime < 3 && lastBeAttemptTime > 0)
             {
+                // Too soon since last attempt — skip
+            }
+            else if(PositionSelect(pendingSymbol))
+            {
+                lastBeAttemptTime = TimeCurrent();
                 double curSl  = PositionGetDouble(POSITION_SL);
                 double curTp  = PositionGetDouble(POSITION_TP);
                 long   beDigits = (long)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS);
@@ -209,7 +216,9 @@ void OnTimer()
                     modReq.sl = newSl;
                     modReq.tp = newTp;
                     if(!OrderSend(modReq, modRes))
-                        Log("Break-even: OrderSend SLTP failed: " + (string)GetLastError());
+                    {
+                        int beErr = GetLastError();
+                        Log("Break-even: OrderSend SLTP failed: " + (string)beErr);
                     else
                     {
                         // Verify the SL was actually moved before setting the flag
@@ -278,7 +287,36 @@ void OnTimer()
     string tradeSymbol  = Trim(ExtractJsonValue(response, "symbol"));
 
     if(tradeId == "" || status == "")
+    {
+        // Even if no trade armed, check for close requests
+        string closeTicketStr = Trim(ExtractJsonValue(response, "close_ticket"));
+        long closeTicket = 0;
+        if(closeTicketStr != "")
+            closeTicket = StringToInteger(closeTicketStr);
+        if(closeTicket > 0)
+        {
+            string closeSymbol = Trim(ExtractJsonValue(response, "close_symbol"));
+            if(closeSymbol == "")
+                closeSymbol = _Symbol;
+            EnsureSymbol(closeSymbol);
+            ClosePositionByTicket(closeTicket, closeSymbol);
+        }
         return;
+    }
+
+    // Also check for close requests on every poll, regardless of armed state
+    string closeTicketStr = Trim(ExtractJsonValue(response, "close_ticket"));
+    long closeTicket = 0;
+    if(closeTicketStr != "" && closeTicketStr != "0")
+        closeTicket = StringToInteger(closeTicketStr);
+    if(closeTicket > 0)
+    {
+        string closeSymbol = Trim(ExtractJsonValue(response, "close_symbol"));
+        if(closeSymbol == "")
+            closeSymbol = _Symbol;
+        EnsureSymbol(closeSymbol);
+        ClosePositionByTicket(closeTicket, closeSymbol);
+    }
 
     if(targetSymbol != "" && targetSymbol != _Symbol)
     {
@@ -556,6 +594,134 @@ void ExecuteTradeLocal()
                                 (long)result.order, (long)result.deal, execEntry, slippage, spread);
         currentState = STATE_ERROR;
         Comment("FAILED\n" + result.comment);
+    }
+}
+
+void ClosePositionByTicket(long ticket, string symbol)
+{
+    if(!EnsureSymbol(symbol))
+        return;
+
+    if(!PositionSelect(symbol))
+    {
+        Log("ClosePosition: PositionSelect failed for " + symbol);
+        return;
+    }
+
+    // Check if the position exists
+    if(!HistorySelect(TimeCurrent() - 60, TimeCurrent() + 1))
+    {
+        Log("ClosePosition: HistorySelect failed");
+    }
+
+    // Check if position with this ticket exists
+    bool found = false;
+    string posSymbol = "";
+    double posVolume = 0;
+    long posType = 0;
+    long posTicket = 0;
+    double posPriceOpen = 0;
+
+    int total = (int)PositionsTotal();
+    for(int i = 0; i < total; i++)
+    {
+        ulong t = PositionGetTicket(i);
+        if(PositionGetString(POSITION_SYMBOL) == symbol && (long)PositionGetInteger(POSITION_TICKET) == ticket)
+        {
+            found = true;
+            posSymbol = PositionGetString(POSITION_SYMBOL);
+            posVolume = PositionGetDouble(POSITION_VOLUME);
+            posType = PositionGetInteger(POSITION_TYPE);
+            posTicket = (long)PositionGetInteger(POSITION_TICKET);
+            posPriceOpen = PositionGetDouble(POSITION_PRICE_OPEN);
+            break;
+        }
+    }
+
+    // Also check history positions
+    if(!found)
+    {
+        int histTotal = (int)HistoryOrdersTotal();
+        for(int i = 0; i < histTotal; i++)
+        {
+            ulong order = OrderGetTicket(i);
+            if(OrderGetInteger(ORDER_SYMBOL) == symbol && (long)OrderGetInteger(ORDER_TICKET) == ticket)
+            {
+                posTicket = ticket;
+                posSymbol = symbol;
+                break;
+            }
+        }
+    }
+
+    if(!found)
+    {
+        Log("ClosePosition: Position ticket " + (string)ticket + " not found for " + symbol);
+        return;
+    }
+
+    MqlTick tick;
+    if(!SymbolInfoTick(posSymbol, tick))
+    {
+        Log("ClosePosition: No tick data for " + posSymbol);
+        return;
+    }
+
+    MqlTradeRequest request = {};
+    MqlTradeResult result = {};
+
+    request.action = TRADE_ACTION_DEAL;
+    request.symbol = posSymbol;
+    request.volume = posVolume;
+    request.position = (ulong)posTicket;
+    request.deviation = Deviation;
+    request.magic = MagicNumber;
+    request.comment = "Close by EA";
+    request.type_time = ORDER_TIME_GTC;
+    request.type_filling = fillMode;
+
+    double closePrice = 0;
+    double pnl = 0;
+    double entryPrice = posPriceOpen;
+
+    if(posType == POSITION_TYPE_BUY)
+    {
+        request.type = ORDER_TYPE_SELL;
+        request.price = tick.bid;
+        closePrice = tick.bid;
+        pnl = (tick.bid - entryPrice) * posVolume * _Point * 10;
+    }
+    else if(posType == POSITION_TYPE_SELL)
+    {
+        request.type = ORDER_TYPE_BUY;
+        request.price = tick.ask;
+        closePrice = tick.ask;
+        pnl = (entryPrice - tick.ask) * posVolume * _Point * 10;
+    }
+    else
+    {
+        Log("ClosePosition: Unknown position type: " + (string)posType);
+        return;
+    }
+
+    Log("ClosePosition: Sending close for ticket=" + (string)posTicket
+        + " " + posSymbol + " type=" + (string)posType + " volume=" + (string)posVolume);
+
+    if(!OrderSend(request, result))
+    {
+        int err = GetLastError();
+        Log("ClosePosition: OrderSend failed: " + (string)err);
+    }
+    else
+    {
+        Log("ClosePosition: retcode=" + (string)result.retcode
+            + " comment=" + result.comment + " deal=" + (string)result.deal);
+        string payload = StringFormat(
+            "{\"ticket\":%d,\"symbol\":\"%s\",\"status\":\"closed\",\"price\":%.5f,\"pnl\":%.2f,\"retcode\":%d,\"comment\":\"%s\"}",
+            (int)posTicket, posSymbol, closePrice, pnl, (int)result.retcode, result.comment
+        );
+        string response;
+        SendPostRequest(FlaskURL + "/api/ea/report_close", payload, response);
     }
 }
 
