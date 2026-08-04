@@ -115,6 +115,7 @@ ea_state = {
     "candles": {},
     "last_seen": None,
     "requested_symbol": None,
+    "close_request": None,
 }
 TRADE_HISTORY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.db")
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json")
@@ -916,6 +917,7 @@ def api_ea_pending():
         candle_close_unix = _compute_candle_close_unix(trade)
         tf = trade.get("timeframe", TIMEFRAME)
         candle_time_str = trade.get("candle_time", "")
+        close_req = ea_state.pop("close_request", None)
         return jsonify({
             "trade_id": trade["trade_id"],
             "status": trade["status"],
@@ -930,6 +932,8 @@ def api_ea_pending():
             "lot": trade.get("lot", 0),
             "be_rr": trade.get("be_rr", 0),
             "be_trigger": trade.get("be_trigger", 0),
+            "close_ticket": close_req.get("ticket") if close_req else 0,
+            "close_symbol": close_req.get("symbol", trade.get("symbol", "")) if close_req else "",
             "error": trade.get("error", ""),
         })
 
@@ -941,6 +945,7 @@ def api_ea_pending():
         tf = trade.get("timeframe", TIMEFRAME)
         candle_time_str = trade.get("candle_time", "")
         trade_symbol = trade.get("symbol", _current_symbol())
+        close_req = ea_state.pop("close_request", None)
         return jsonify({
             "trade_id": trade["trade_id"],
             "status": trade["status"],
@@ -959,12 +964,17 @@ def api_ea_pending():
             "be_trigger": trade.get("be_trigger", 0),
             "risk_amount": trade.get("risk_amount", 0),
             "rr_ratio": trade.get("rr_ratio", 0),
+            "close_ticket": close_req.get("ticket") if close_req else 0,
+            "close_symbol": close_req.get("symbol", trade_symbol) if close_req else "",
             "error": trade.get("error", ""),
         })
 
+    close_req = ea_state.pop("close_request", None)
     return jsonify({
         "status": "idle",
         "requested_symbol": ea_state.get("requested_symbol") or _current_symbol(),
+        "close_ticket": close_req.get("ticket") if close_req else 0,
+        "close_symbol": close_req.get("symbol", _current_symbol()) if close_req else "",
     })
 
 
@@ -1070,6 +1080,37 @@ def api_ea_report_execution():
     if trade_id in pending_trades:
         pending_trades[trade_id].update(data)
     ea_state["last_seen"] = datetime.now().isoformat()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ea/report_close", methods=["POST"])
+def api_ea_report_close():
+    data = request.get_json(silent=True) or {}
+    ticket = data.get("ticket")
+    if ticket is None:
+        return jsonify({"error": "Missing ticket"}), 400
+    ea_state["last_seen"] = datetime.now().isoformat()
+    closed_at = datetime.now().isoformat()
+    close_price = data.get("price", 0.0)
+    pnl = data.get("pnl", 0.0)
+    add_log("info", f"Position closed by EA: ticket={ticket} pnl={pnl}")
+    notify(f"🔒 <b>Position Closed</b>\nTicket: {ticket}\nPnL: {pnl}")
+    try:
+        conn = _get_db()
+        try:
+            conn.execute(
+                """
+                UPDATE trades 
+                SET status = 'Closed', closed_at = ?, close_price = ?, pnl = ?, result = ?
+                WHERE ticket = ? AND status != 'Closed'
+                """,
+                (closed_at, close_price, pnl, "EA Close", int(ticket)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to update trade close: {e}")
     return jsonify({"status": "ok"})
 
 
@@ -1227,6 +1268,16 @@ def api_close_position():
             logger.warning(f"Failed to update trade close: {e}")
 
         return jsonify({"status": "closed", "ticket": ticket, "pnl": pnl, "close_price": close_price})
+
+    if result is None:
+        ea_state["close_request"] = {
+            "ticket": int(ticket),
+            "symbol": data.get("symbol", _current_symbol()),
+        }
+        add_log("info", f"Close request queued for EA: ticket={ticket}")
+        notify(f"⏳ <b>Close Request Sent</b>\nTicket: {ticket}\nThe EA will close this position on the next tick.")
+        return jsonify({"status": "queued_for_ea", "ticket": ticket}), 202
+
     rc = result.retcode if result else 0
     comment = result.comment if result else "Unknown"
     add_log("error", f"Close failed ticket={ticket} retcode={rc} comment={comment}")
