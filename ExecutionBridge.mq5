@@ -193,8 +193,11 @@ void OnTimer()
                 lastBeAttemptTime = TimeCurrent();
                 double curSl  = PositionGetDouble(POSITION_SL);
                 double curTp  = PositionGetDouble(POSITION_TP);
+                long   position = PositionGetInteger(POSITION_TICKET);
                 long   beDigits = (long)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS);
                 double bePoint  = SymbolInfoDouble(pendingSymbol, SYMBOL_POINT);
+                double stopsLevel = (double)SymbolInfoInteger(pendingSymbol, SYMBOL_TRADE_STOPS_LEVEL) * bePoint;
+                double freezeLevel = (double)SymbolInfoInteger(pendingSymbol, SYMBOL_TRADE_FREEZE_LEVEL) * bePoint;
                 double triggerPrice = pendingBeTrigger;
                 double currentPrice = (pendingDirection == "BUY")
                     ? SymbolInfoDouble(pendingSymbol, SYMBOL_BID)
@@ -210,32 +213,62 @@ void OnTimer()
                 {
                     double newSl = NormalizeDouble(pendingEntry, (int)beDigits);
                     double newTp = NormalizeDouble(curTp, (int)beDigits);
+                    double minDistance = MathMax(stopsLevel, freezeLevel);
+
+                    if(pendingDirection == "BUY")
+                    {
+                        double maxSl = NormalizeDouble(currentPrice - minDistance, (int)beDigits);
+                        if(newSl > maxSl)
+                        {
+                            Log("Break-even: SL too close, adjusting " + DoubleToString(newSl, (int)beDigits) + " to " + DoubleToString(maxSl, (int)beDigits));
+                            newSl = maxSl;
+                        }
+                    }
+                    else
+                    {
+                        double minSl = NormalizeDouble(currentPrice + minDistance, (int)beDigits);
+                        if(newSl < minSl)
+                        {
+                            Log("Break-even: SL too close, adjusting " + DoubleToString(newSl, (int)beDigits) + " to " + DoubleToString(minSl, (int)beDigits));
+                            newSl = minSl;
+                        }
+                    }
+
                     MqlTradeRequest modReq = {};
                     MqlTradeResult modRes = {};
                     modReq.action = TRADE_ACTION_SLTP;
                     modReq.symbol = pendingSymbol;
+                    modReq.position = (ulong)position;
                     modReq.sl = newSl;
                     modReq.tp = newTp;
+                    long filling = SymbolInfoInteger(pendingSymbol, SYMBOL_FILLING_MODE);
+                    if((filling & SYMBOL_FILLING_FOK) != 0)
+                        modReq.type_filling = ORDER_FILLING_FOK;
+                    else if((filling & SYMBOL_FILLING_IOC) != 0)
+                        modReq.type_filling = ORDER_FILLING_IOC;
+                    else
+                        modReq.type_filling = ORDER_FILLING_RETURN;
+                    modReq.magic = MagicNumber;
+                    Log("Break-even: pos=" + (string)position + " SL=" + DoubleToString(newSl, (int)beDigits) + " TP=" + DoubleToString(newTp, (int)beDigits));
                     if(!OrderSend(modReq, modRes))
                     {
                         int beErr = GetLastError();
-                        Log("Break-even: OrderSend SLTP failed: " + (string)beErr);
+                        Log("Break-even: OrderSend SLTP failed: " + (string)beErr + " retcode=" + (string)modRes.retcode);
                     }
                     else
                     {
-                        // Verify the SL was actually moved before setting the flag
-                        if(PositionSelect(pendingSymbol))
+                        if(PositionSelectByTicket((ulong)position))
                         {
                             double verifySl = PositionGetDouble(POSITION_SL);
                             if(MathAbs(verifySl - newSl) <= bePoint)
                             {
                                 breakEvenApplied = true;
-                                Log("Break-even applied at entry price=" + (string)newSl);
+                                Log("Break-even applied at entry price=" + DoubleToString(newSl, (int)beDigits));
                                 Comment("BREAK EVEN\nSL moved to entry");
                             }
                             else
                             {
-                                Log("Break-even: SL not moved, verifySl=" + (string)verifySl + " target=" + (string)newSl);
+                                Log("Break-even: SL not moved, verifySl=" + DoubleToString(verifySl, (int)beDigits) + " target=" + DoubleToString(newSl, (int)beDigits));
                             }
                         }
                     }
