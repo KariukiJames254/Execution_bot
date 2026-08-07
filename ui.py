@@ -365,6 +365,8 @@ def _current_symbol():
 
 
 def _ea_connected():
+    if os.environ.get("LOCAL_DEV") == "true":
+        return True
     last_seen = ea_state.get("last_seen")
     if not last_seen:
         return False
