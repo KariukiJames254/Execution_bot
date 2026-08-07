@@ -169,9 +169,9 @@ if os.environ.get("LOCAL_DEV") == "true":
         "EURUSD": {
             "ticket": 57818228068,
             "symbol": "EURUSD",
-            "direction": "BUY",
-            "lot": 0.10,
-            "entry": 1.15275,
+            "type": 0,
+            "volume": 0.10,
+            "price_open": 1.15275,
             "sl": 1.15221,
             "tp": 1.15545,
             "profit": 45.50,
