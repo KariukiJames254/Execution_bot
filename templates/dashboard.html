@@ -863,12 +863,12 @@ function refreshData() {
       var direction = p.type === 0 || p.type === 'BUY' ? 'BUY' : 'SELL';
       return '<div class="position-row">' +
         '<strong style="color:' + (direction === 'BUY' ? '#3fb950' : '#f85149') + '">' + direction + '</strong>' +
-        p.symbol + ' | Vol: ' + p.volume +
-        ' | Entry: ' + p.price_open.toFixed(5) +
-        ' | SL: ' + p.sl.toFixed(5) +
-        ' | TP: ' + p.tp.toFixed(5) +
-        ' | PnL: ' + p.profit.toFixed(2) +
-        ' <button class="btn" style="background:#da3633;color:#fff;padding:2px 8px;font-size:11px;margin-left:8px;" onclick="closePosition(' + p.ticket + ')">Close</button>' +
+        (p.symbol || '') + ' | Vol: ' + (p.volume || 0).toFixed(2) +
+        ' | Entry: ' + (p.price_open || 0).toFixed(5) +
+        ' | SL: ' + (p.sl || 0).toFixed(5) +
+        ' | TP: ' + (p.tp || 0).toFixed(5) +
+        ' | PnL: ' + (p.profit || 0).toFixed(2) +
+        ' <button class="btn" style="background:#da3633;color:#fff;padding:2px 8px;font-size:11px;margin-left:8px;" onclick="closePosition(' + (p.ticket || '') + ')">Close</button>' +
         '</div>';
     }).join('');
    });
@@ -909,11 +909,11 @@ function refreshData() {
       var resultColor = trade.result === 'TP' ? '#3fb950' : trade.result === 'SL' ? '#f85149' : trade.result === 'Manual' ? '#d29922' : '#8b949e';
       var resultText = trade.result || trade.status || '';
       return '<tr>' +
-        '<td>' + trade.time + '</td>' +
-        '<td>' + trade.symbol + '</td>' +
-        '<td style="color:' + (trade.direction === 'BUY' ? '#3fb950' : '#f85149') + ';">' + trade.direction + '</td>' +
-        '<td>' + trade.lot.toFixed(2) + '</td>' +
-        '<td>' + trade.entry.toFixed(5) + '</td>' +
+        '<td>' + (trade.time || '') + '</td>' +
+        '<td>' + (trade.symbol || '') + '</td>' +
+        '<td style="color:' + (trade.direction === 'BUY' ? '#3fb950' : '#f85149') + ';">' + (trade.direction || '') + '</td>' +
+        '<td>' + (trade.lot || 0).toFixed(2) + '</td>' +
+        '<td>' + (trade.entry || 0).toFixed(5) + '</td>' +
         '<td>' + (trade.close_price ? trade.close_price.toFixed(5) : '---') + '</td>' +
         '<td style="color:' + (trade.pnl > 0 ? '#3fb950' : trade.pnl < 0 ? '#f85149' : '#8b949e') + ';">' + (trade.pnl ? '$' + trade.pnl.toFixed(2) : '$0.00') + '</td>' +
         '<td style="color:' + resultColor + ';">' + resultText + '</td>' +
