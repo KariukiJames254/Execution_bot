@@ -62,7 +62,7 @@ def calculate_sl(entry_price, sl_distance_pips, order_type):
     return round(entry_price + sl_distance_pips * point, digits)
 
 
-def calculate_tp(entry_price, sl_distance_pips, order_type, reward_ratio=2):
+def calculate_tp(entry_price, sl_distance_pips, order_type, reward_ratio=5):
     tp_pips = sl_distance_pips * reward_ratio
     info = _symbol_info()
     if info is None:

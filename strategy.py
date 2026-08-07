@@ -15,7 +15,7 @@ class Strategy:
 
     SL_PIPS = 50
     TP_PIPS = 100
-    RR_RATIO = 2
+    RR_RATIO = 5
 
     RISK_MODE = "fixed_amount"
     RISK_AMOUNT = 100.0

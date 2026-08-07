@@ -1462,6 +1462,8 @@ def api_prepare_trade():
         dist_points = abs(entry - sl) / point
         dist_pips = dist_points / 10.0
 
+        add_log("info", f"ARMING TRADE DEBUG: RR={rr_ratio} Entry={entry} SL={sl} RiskDist={diff:.5f} ({dist_pips:.1f} pips) TP={tp}")
+
         be_trigger = entry + diff * be_rr if direction == "BUY" else entry - diff * be_rr
 
         trade_id = f"{symbol}_{candle_time_str}_{direction}"

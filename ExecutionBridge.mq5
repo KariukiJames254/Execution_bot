@@ -543,16 +543,28 @@ void ExecuteTradeLocal()
     if(pendingDirection == "BUY")
     {
         if(reqSl > currentPrice - minDist)
+        {
+            Log("ExecuteTradeLocal: Broker SL adjustment pendingSl=" + DoubleToString(reqSl, (int)digits) + " -> " + DoubleToString(currentPrice - minDist, (int)digits));
             reqSl = NormalizeDouble(currentPrice - minDist, (int)digits);
+        }
         if(reqTp <= currentPrice + minDist)
+        {
+            Log("ExecuteTradeLocal: Broker TP adjustment pendingTp=" + DoubleToString(reqTp, (int)digits) + " -> " + DoubleToString(currentPrice + minDist, (int)digits));
             reqTp = NormalizeDouble(currentPrice + minDist, (int)digits);
+        }
     }
     else  // SELL
     {
         if(reqSl < currentPrice + minDist)
+        {
+            Log("ExecuteTradeLocal: Broker SL adjustment pendingSl=" + DoubleToString(reqSl, (int)digits) + " -> " + DoubleToString(currentPrice + minDist, (int)digits));
             reqSl = NormalizeDouble(currentPrice + minDist, (int)digits);
+        }
         if(reqTp >= currentPrice - minDist)
+        {
+            Log("ExecuteTradeLocal: Broker TP adjustment pendingTp=" + DoubleToString(reqTp, (int)digits) + " -> " + DoubleToString(currentPrice - minDist, (int)digits));
             reqTp = NormalizeDouble(currentPrice - minDist, (int)digits);
+        }
     }
 
     double execEntry = (pendingDirection == "BUY") ? tick.ask : tick.bid;
@@ -623,68 +635,30 @@ void ClosePositionByTicket(long ticket, string symbol)
     if(!EnsureSymbol(symbol))
         return;
 
-    if(!PositionSelect(symbol))
+    // Select position by TICKET, not by symbol, to avoid selecting wrong position
+    if(!PositionSelectByTicket((ulong)ticket))
     {
-        Log("ClosePosition: PositionSelect failed for " + symbol);
+        Log("ClosePosition: PositionSelectByTicket failed for ticket=" + (string)ticket);
         return;
     }
 
-    // Check if the position exists
-    if(!HistorySelect(TimeCurrent() - 60, TimeCurrent() + 1))
+    // Verify the selected position matches
+    string actualSymbol = PositionGetString(POSITION_SYMBOL);
+    if(actualSymbol != symbol)
     {
-        Log("ClosePosition: HistorySelect failed");
-    }
-
-    // Check if position with this ticket exists
-    bool found = false;
-    string posSymbol = "";
-    double posVolume = 0;
-    long posType = 0;
-    long posTicket = 0;
-    double posPriceOpen = 0;
-
-    int total = (int)PositionsTotal();
-    for(int i = 0; i < total; i++)
-    {
-        ulong t = PositionGetTicket(i);
-        if(PositionGetString(POSITION_SYMBOL) == symbol && (long)PositionGetInteger(POSITION_TICKET) == ticket)
-        {
-            found = true;
-            posSymbol = PositionGetString(POSITION_SYMBOL);
-            posVolume = PositionGetDouble(POSITION_VOLUME);
-            posType = PositionGetInteger(POSITION_TYPE);
-            posTicket = (long)PositionGetInteger(POSITION_TICKET);
-            posPriceOpen = PositionGetDouble(POSITION_PRICE_OPEN);
-            break;
-        }
-    }
-
-    // Also check history positions
-    if(!found)
-    {
-        int histTotal = (int)HistoryOrdersTotal();
-        for(int i = 0; i < histTotal; i++)
-        {
-            ulong order = OrderGetTicket(i);
-            if(OrderGetString(ORDER_SYMBOL) == symbol && (long)OrderGetInteger(ORDER_TICKET) == ticket)
-            {
-                posTicket = ticket;
-                posSymbol = symbol;
-                break;
-            }
-        }
-    }
-
-    if(!found)
-    {
-        Log("ClosePosition: Position ticket " + (string)ticket + " not found for " + symbol);
+        Log("ClosePosition: Ticket " + (string)ticket + " symbol mismatch: expected=" + symbol + " actual=" + actualSymbol);
         return;
     }
+
+    long posType = PositionGetInteger(POSITION_TYPE);
+    double posVolume = PositionGetDouble(POSITION_VOLUME);
+    double posPriceOpen = PositionGetDouble(POSITION_PRICE_OPEN);
+    long posTicket = (long)PositionGetInteger(POSITION_TICKET);
 
     MqlTick tick;
-    if(!SymbolInfoTick(posSymbol, tick))
+    if(!SymbolInfoTick(symbol, tick))
     {
-        Log("ClosePosition: No tick data for " + posSymbol);
+        Log("ClosePosition: No tick data for " + symbol);
         return;
     }
 
@@ -692,40 +666,37 @@ void ClosePositionByTicket(long ticket, string symbol)
     MqlTradeResult result = {};
 
     request.action = TRADE_ACTION_DEAL;
-    request.symbol = posSymbol;
+    request.symbol = symbol;
     request.volume = posVolume;
     request.position = (ulong)posTicket;
     request.deviation = Deviation;
     request.magic = MagicNumber;
     request.comment = "Close by EA";
     request.type_time = ORDER_TIME_GTC;
-    long fillingMode = SymbolInfoInteger(posSymbol, SYMBOL_FILLING_MODE);
-    ENUM_ORDER_TYPE_FILLING fillMode;
+    long fillingMode = SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
     if((fillingMode & SYMBOL_FILLING_FOK) != 0)
-        fillMode = ORDER_FILLING_FOK;
+        request.type_filling = ORDER_FILLING_FOK;
     else if((fillingMode & SYMBOL_FILLING_IOC) != 0)
-        fillMode = ORDER_FILLING_IOC;
+        request.type_filling = ORDER_FILLING_IOC;
     else
-        fillMode = ORDER_FILLING_RETURN;
-    request.type_filling = fillMode;
+        request.type_filling = ORDER_FILLING_RETURN;
 
     double closePrice = 0;
     double pnl = 0;
-    double entryPrice = posPriceOpen;
 
     if(posType == POSITION_TYPE_BUY)
     {
         request.type = ORDER_TYPE_SELL;
         request.price = tick.bid;
         closePrice = tick.bid;
-        pnl = (tick.bid - entryPrice) * posVolume * _Point * 10;
+        pnl = (tick.bid - posPriceOpen) * posVolume * _Point * 10;
     }
     else if(posType == POSITION_TYPE_SELL)
     {
         request.type = ORDER_TYPE_BUY;
         request.price = tick.ask;
         closePrice = tick.ask;
-        pnl = (entryPrice - tick.ask) * posVolume * _Point * 10;
+        pnl = (posPriceOpen - tick.ask) * posVolume * _Point * 10;
     }
     else
     {
@@ -733,21 +704,24 @@ void ClosePositionByTicket(long ticket, string symbol)
         return;
     }
 
-    Log("ClosePosition: Sending close for ticket=" + (string)posTicket
-        + " " + posSymbol + " type=" + (string)posType + " volume=" + (string)posVolume);
+    Log("ClosePosition: Sending close ticket=" + (string)posTicket
+        + " symbol=" + symbol + " type=" + (string)posType
+        + " volume=" + (string)posVolume + " price=" + DoubleToString(closePrice, 5)
+        + " pnl=" + DoubleToString(pnl, 2));
 
     if(!OrderSend(request, result))
     {
         int err = GetLastError();
-        Log("ClosePosition: OrderSend failed: " + (string)err);
+        Log("ClosePosition: OrderSend FAILED retcode=" + (string)result.retcode
+            + " err=" + (string)err + " comment=" + result.comment);
     }
     else
     {
-        Log("ClosePosition: retcode=" + (string)result.retcode
+        Log("ClosePosition: OrderSend retcode=" + (string)result.retcode
             + " comment=" + result.comment + " deal=" + (string)result.deal);
         string payload = StringFormat(
             "{\"ticket\":%d,\"symbol\":\"%s\",\"status\":\"closed\",\"price\":%.5f,\"pnl\":%.2f,\"retcode\":%d,\"comment\":\"%s\"}",
-            (int)posTicket, posSymbol, closePrice, pnl, (int)result.retcode, result.comment
+            (int)posTicket, symbol, closePrice, pnl, (int)result.retcode, result.comment
         );
         string response;
         SendPostRequest(FlaskURL + "/api/ea/report_close", payload, response);

@@ -11,6 +11,7 @@ from config import (
     RISK_PER_TRADE,
     MAX_OPEN_POSITIONS,
     FIXED_LOT,
+    RR_RATIO,
 )
 from broker import initialize, login, shutdown, is_connected, get_account_details
 from market import get_previous_candle, get_current_price, is_market_open
@@ -92,7 +93,7 @@ def execute_trade(direction):
 
     lot = calculate_lot_percentage(SYMBOL, RISK_PER_TRADE, SL_PIPS, FIXED_LOT)
     sl = calculate_sl(entry_price, SL_PIPS, direction)
-    tp = calculate_tp(entry_price, SL_PIPS, direction)
+    tp = calculate_tp(entry_price, SL_PIPS, direction, reward_ratio=RR_RATIO)
 
     if direction == "BUY":
         logger.info(f"BUY: price={entry_price}, lot={lot}, SL={sl}, TP={tp}")
