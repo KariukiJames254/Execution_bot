@@ -13,7 +13,7 @@
 #property version   "5.00"
 #property strict
 
-input string FlaskURL     = "http://localhost:5000";  // Local Flask API endpoint
+input string FlaskURL     = "http://102.203.116.146:5000";  // VPS Flask API endpoint
 input bool   TEST_MODE    = false;
 input long   MagicNumber  = 123456;   // Configurable magic number
 input int    Deviation    = 10;       // Slippage in points

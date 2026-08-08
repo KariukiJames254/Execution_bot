@@ -118,114 +118,6 @@ ea_state = {
     "close_request": None,
 }
 
-if os.environ.get("LOCAL_DEV") == "true":
-    from symbol_store import set_symbol_info, set_candle
-    set_symbol_info("EURUSD", {
-        "symbol": "EURUSD",
-        "digits": 5,
-        "point": 0.00001,
-        "volume_min": 0.01,
-        "volume_max": 100.0,
-        "volume_step": 0.01,
-        "trade_tick_value": 0.0001,
-        "trade_stops_level": 10,
-        "filling_mode": 3,
-        "visible": 1,
-        "trade_mode": 4,
-        "bid": 1.15250,
-        "ask": 1.15275,
-    })
-    set_candle("EURUSD", "M15", {
-        "symbol": "EURUSD",
-        "timeframe": "M15",
-        "time": 1723065600,
-        "open": 1.15200,
-        "high": 1.15300,
-        "low": 1.15180,
-        "close": 1.15275,
-        "tick_volume": 1234,
-        "shift": 0,
-    })
-    ea_state["last_seen"] = datetime.now().isoformat()
-    ea_state["account"] = {
-        "login": 12345678,
-        "server": "MetaQuotes-Demo",
-        "company": "MetaQuotes",
-        "balance": 10000.00,
-        "equity": 10050.25,
-        "profit": 50.25,
-        "margin": 100.00,
-        "margin_level": 100.0,
-        "currency": "USD",
-        "leverage": 100,
-        "trade_mode": 0,
-    }
-    ea_state["symbols"] = {
-        "EURUSD": {
-            "symbol": "EURUSD",
-            "digits": 5,
-            "point": 0.00001,
-            "volume_min": 0.01,
-            "volume_max": 100.0,
-            "volume_step": 0.01,
-            "trade_tick_value": 0.0001,
-            "trade_stops_level": 10,
-            "filling_mode": 3,
-            "visible": 1,
-            "trade_mode": 4,
-            "bid": 1.15250,
-            "ask": 1.15275,
-        }
-    }
-    ea_state["candles"] = {
-        "EURUSD": {
-            "M15": {
-                "symbol": "EURUSD",
-                "timeframe": "M15",
-                "time": 1723065600,
-                "open": 1.15200,
-                "high": 1.15300,
-                "low": 1.15180,
-                "close": 1.15275,
-                "tick_volume": 1234,
-                "shift": 0,
-            }
-        }
-    }
-    ea_state["positions"] = {
-        "EURUSD": {
-            "ticket": 57818228068,
-            "symbol": "EURUSD",
-            "type": 0,
-            "volume": 0.10,
-            "price_open": 1.15275,
-            "sl": 1.15221,
-            "tp": 1.15545,
-            "profit": 45.50,
-        }
-    }
-    trade_history = [
-        {
-            "trade_id": "EURUSD_2026-08-07T12:00:00_BUY",
-            "time": "2026-08-07 12:00:00",
-            "symbol": "EURUSD",
-            "direction": "BUY",
-            "lot": 0.10,
-            "entry": 1.15230,
-            "sl": 1.15180,
-            "tp": 1.15530,
-            "status": "Executed",
-            "ticket": 57818228068,
-            "position_ticket": 57460635246,
-            "slippage": 0.00002,
-            "risk_amount": 50.00,
-            "rr_ratio": 5.0,
-            "close_price": 0,
-            "pnl": 0,
-            "result": "",
-            "created_at": "2026-08-07 12:00:00",
-        }
-    ]
 TRADE_HISTORY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.db")
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json")
 EA_STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ea_state")
@@ -474,8 +366,6 @@ def _current_symbol():
 
 
 def _ea_connected():
-    if os.environ.get("LOCAL_DEV") == "true":
-        return True
     last_seen = ea_state.get("last_seen")
     if not last_seen:
         return False
