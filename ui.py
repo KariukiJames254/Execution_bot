@@ -119,6 +119,33 @@ ea_state = {
 }
 
 if os.environ.get("LOCAL_DEV") == "true":
+    from symbol_store import set_symbol_info, set_candle
+    set_symbol_info("EURUSD", {
+        "symbol": "EURUSD",
+        "digits": 5,
+        "point": 0.00001,
+        "volume_min": 0.01,
+        "volume_max": 100.0,
+        "volume_step": 0.01,
+        "trade_tick_value": 0.0001,
+        "trade_stops_level": 10,
+        "filling_mode": 3,
+        "visible": 1,
+        "trade_mode": 4,
+        "bid": 1.15250,
+        "ask": 1.15275,
+    })
+    set_candle("EURUSD", "M15", {
+        "symbol": "EURUSD",
+        "timeframe": "M15",
+        "time": 1723065600,
+        "open": 1.15200,
+        "high": 1.15300,
+        "low": 1.15180,
+        "close": 1.15275,
+        "tick_volume": 1234,
+        "shift": 0,
+    })
     ea_state["last_seen"] = datetime.now().isoformat()
     ea_state["account"] = {
         "login": 12345678,
