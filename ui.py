@@ -439,14 +439,14 @@ def _preflight_checks(symbol, data=None):
     })
 
     sym_info = ea_state.get("symbols", {}).get(symbol)
-    sym_info_ok = sym_info is not None
+    sym_info_ok = sym_info is not None and sym_info.get("digits", 0) > 0 and sym_info.get("point", 0) > 0
     from symbol_store import has_symbol_info
     registered = has_symbol_info(symbol) or (sym_info is not None)
     checks.append({
         "name": f"Symbol Info ({symbol})",
         "passed": sym_info_ok,
         "status": "passed" if sym_info_ok else ("waiting" if (connected and registered) else "failed"),
-        "message": f"Digits {sym_info.get('digits')}, Point {sym_info.get('point')}" if sym_info
+        "message": f"Digits {sym_info.get('digits')}, Point {sym_info.get('point')}" if sym_info and sym_info.get("digits", 0) > 0
                    else (f"EA reports {symbol} registered; waiting for symbol details..." if registered
                          else f"Symbol {symbol} not in Market Watch. Select it in MT5."),
     })
