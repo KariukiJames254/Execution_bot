@@ -537,8 +537,12 @@ void ExecuteTradeLocal()
     double reqSl = pendingSl;
     double reqTp = pendingTp;
 
-    double minDist = MathMax(slLevel, point * 10);
+    double minDist = MathMax(slLevel * 2, point * 20);
     double currentPrice = (pendingDirection == "BUY") ? tick.ask : tick.bid;
+    double originalSl = reqSl;
+    double originalTp = reqTp;
+
+    Log("ExecuteTradeLocal: bid=" + DoubleToString(tick.bid, (int)digits) + " ask=" + DoubleToString(tick.ask, (int)digits) + " slLevel=" + (string)slLevel + " minDist=" + DoubleToString(minDist, (int)digits));
 
     if(pendingDirection == "BUY")
     {
@@ -595,16 +599,61 @@ void ExecuteTradeLocal()
 
     string commentStr = "ExecutionBot " + execSymbol + " " + pendingDirection;
     Log("OrderSend " + execSymbol + " " + pendingDirection + " lot=" + (string)lot
-        + " SL=" + (string)reqSl + " TP=" + (string)reqTp
+        + " SL=" + DoubleToString(reqSl, (int)digits) + " TP=" + DoubleToString(reqTp, (int)digits)
         + " dev=" + (string)Deviation + " magic=" + (string)MagicNumber + " fill=" + (string)fillMode);
 
-    if(!OrderSend(request, result))
+    int sendAttempts = 0;
+    int maxAttempts = 3;
+    double trySl = reqSl;
+    double tryTp = reqTp;
+    bool orderSuccess = false;
+
+    while(sendAttempts < maxAttempts && !orderSuccess)
     {
+        request.sl = trySl;
+        request.tp = tryTp;
+
+        if(OrderSend(request, result))
+        {
+            orderSuccess = true;
+            break;
+        }
+
         int err = GetLastError();
+        sendAttempts++;
+
+        if(err == 4756 && sendAttempts < maxAttempts)
+        {
+            double backoff = minDist * (1.0 + sendAttempts * 0.5);
+            Log("OrderSend 4756 retry " + (string)sendAttempts + "/" + (string)maxAttempts + " backoff=" + DoubleToString(backoff, (int)digits));
+
+            if(pendingDirection == "BUY")
+            {
+                trySl = NormalizeDouble(currentPrice - backoff, (int)digits);
+                tryTp = NormalizeDouble(currentPrice + backoff, (int)digits);
+            }
+            else
+            {
+                trySl = NormalizeDouble(currentPrice + backoff, (int)digits);
+                tryTp = NormalizeDouble(currentPrice - backoff, (int)digits);
+            }
+            Sleep(500);
+            continue;
+        }
+
         Log("OrderSend returned false, error=" + (string)err);
         ReportExecutionDetailed(pendingTradeId, "error", err, "OrderSend failed", 0, 0, execEntry, slippage, spread);
         currentState = STATE_ERROR;
         Comment("FAILED\nOrderSend failed err=" + (string)err);
+        return;
+    }
+
+    if(!orderSuccess)
+    {
+        Log("OrderSend failed after " + (string)maxAttempts + " attempts");
+        ReportExecutionDetailed(pendingTradeId, "error", 4756, "OrderSend failed after retries", 0, 0, execEntry, slippage, spread);
+        currentState = STATE_ERROR;
+        Comment("FAILED\nOrderSend failed after retries");
         return;
     }
 
