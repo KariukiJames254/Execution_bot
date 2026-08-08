@@ -43,6 +43,7 @@ double pendingLot = 0;
 double pendingSl = 0;
 double pendingTp = 0;
 double pendingEntry = 0;
+double pendingRiskDistance = 0;
 double pendingBeRr = 0;
 double pendingBeTrigger = 0;
 bool breakEvenApplied = false;
@@ -102,6 +103,7 @@ void _cleanupTrade()
     pendingSl          = 0;
     pendingTp          = 0;
     pendingEntry       = 0;
+    pendingRiskDistance = 0;
     pendingBeRr        = 0;
     pendingBeTrigger   = 0;
     breakEvenApplied   = false;
@@ -361,6 +363,7 @@ void OnTimer()
         pendingSl     = StringToDouble(ExtractJsonValue(response, "sl"));
         pendingTp     = StringToDouble(ExtractJsonValue(response, "tp"));
         pendingEntry  = StringToDouble(ExtractJsonValue(response, "entry"));
+        pendingRiskDistance = MathAbs(pendingEntry - pendingSl);
         pendingBeRr   = StringToDouble(ExtractJsonValue(response, "be_rr"));
         pendingBeTrigger = StringToDouble(ExtractJsonValue(response, "be_trigger"));
         breakEvenApplied = false;
@@ -537,8 +540,30 @@ void ExecuteTradeLocal()
     double reqSl = pendingSl;
     double reqTp = pendingTp;
 
-    double minDist = MathMax(slLevel, point * 10);
+    double minDist = MathMax(slLevel * 2, point * 20);
     double currentPrice = (pendingDirection == "BUY") ? tick.ask : tick.bid;
+    double originalSl = reqSl;
+    double originalTp = reqTp;
+
+    Log("ExecuteTradeLocal: bid=" + DoubleToString(tick.bid, (int)digits) + " ask=" + DoubleToString(tick.ask, (int)digits) + " slLevel=" + (string)slLevel + " minDist=" + DoubleToString(minDist, (int)digits));
+
+    // Recalculate SL/TP based on actual execution price and original risk distance
+    // This ensures SL/TP are valid even if price moved since arming
+    double execEntry = (pendingDirection == "BUY") ? tick.ask : tick.bid;
+    if(pendingRiskDistance > 0)
+    {
+        if(pendingDirection == "BUY")
+        {
+            reqSl = NormalizeDouble(execEntry - pendingRiskDistance, (int)digits);
+            reqTp = NormalizeDouble(execEntry + pendingRiskDistance * 5.0, (int)digits);
+        }
+        else
+        {
+            reqSl = NormalizeDouble(execEntry + pendingRiskDistance, (int)digits);
+            reqTp = NormalizeDouble(execEntry - pendingRiskDistance * 5.0, (int)digits);
+        }
+        Log("ExecuteTradeLocal: Recalculated SL/TP from risk distance. origEntry=" + DoubleToString(pendingEntry, (int)digits) + " execEntry=" + DoubleToString(execEntry, (int)digits) + " riskDist=" + DoubleToString(pendingRiskDistance, (int)digits) + " newSL=" + DoubleToString(reqSl, (int)digits) + " newTP=" + DoubleToString(reqTp, (int)digits));
+    }
 
     if(pendingDirection == "BUY")
     {
@@ -567,9 +592,49 @@ void ExecuteTradeLocal()
         }
     }
 
-    double execEntry = (pendingDirection == "BUY") ? tick.ask : tick.bid;
+    long freezeLevel = (long)SymbolInfoInteger(execSymbol, SYMBOL_TRADE_FREEZE_LEVEL);
+    double freezeDist = freezeLevel * point;
     double slippage = MathAbs(execEntry - pendingEntry);
     double spread = tick.ask - tick.bid;
+
+    Log("ExecuteTradeLocal: ======== FULL ORDER PARAMS ========");
+    Log("ExecuteTradeLocal: Symbol=" + execSymbol + " Direction=" + pendingDirection);
+    Log("ExecuteTradeLocal: Bid=" + DoubleToString(tick.bid, (int)digits) + " Ask=" + DoubleToString(tick.ask, (int)digits));
+    Log("ExecuteTradeLocal: Entry(pending)=" + DoubleToString(pendingEntry, (int)digits) + " Entry(exec)=" + DoubleToString(execEntry, (int)digits));
+    Log("ExecuteTradeLocal: SL(req)=" + DoubleToString(reqSl, (int)digits) + " TP(req)=" + DoubleToString(reqTp, (int)digits));
+    Log("ExecuteTradeLocal: SL(orig)=" + DoubleToString(originalSl, (int)digits) + " TP(orig)=" + DoubleToString(originalTp, (int)digits));
+    Log("ExecuteTradeLocal: Volume=" + (string)lot + " LotStep=" + DoubleToString(lotStep, 2) + " LotMin=" + DoubleToString(lotMin, 2) + " LotMax=" + DoubleToString(lotMax, 2));
+    Log("ExecuteTradeLocal: StopsLevel=" + (string)slLevel + " FreezeLevel=" + (string)freezeDist + " MinDist=" + DoubleToString(minDist, (int)digits));
+    Log("ExecuteTradeLocal: Digits=" + (string)digits + " Point=" + DoubleToString(point, (int)digits));
+    Log("ExecuteTradeLocal: FillingMode=" + (string)fillMode + " Deviation=" + (string)Deviation);
+    Log("ExecuteTradeLocal: Slippage=" + DoubleToString(slippage, (int)digits) + " Spread=" + DoubleToString(spread, (int)digits));
+    Log("ExecuteTradeLocal: =======================================");
+
+    // Validate SL direction for SELL: SL must be ABOVE entry
+    if(pendingDirection == "SELL" && reqSl <= execEntry)
+    {
+        Log("ExecuteTradeLocal: INVALID SL for SELL - SL must be above entry. Adjusting SL.");
+        reqSl = NormalizeDouble(execEntry + minDist, (int)digits);
+    }
+    // Validate SL direction for BUY: SL must be BELOW entry
+    if(pendingDirection == "BUY" && reqSl >= execEntry)
+    {
+        Log("ExecuteTradeLocal: INVALID SL for BUY - SL must be below entry. Adjusting SL.");
+        reqSl = NormalizeDouble(execEntry - minDist, (int)digits);
+    }
+
+    // Validate TP direction for SELL: TP must be BELOW entry
+    if(pendingDirection == "SELL" && reqTp >= execEntry)
+    {
+        Log("ExecuteTradeLocal: INVALID TP for SELL - TP must be below entry. Adjusting TP.");
+        reqTp = NormalizeDouble(execEntry - minDist, (int)digits);
+    }
+    // Validate TP direction for BUY: TP must be ABOVE entry
+    if(pendingDirection == "BUY" && reqTp <= execEntry)
+    {
+        Log("ExecuteTradeLocal: INVALID TP for BUY - TP must be above entry. Adjusting TP.");
+        reqTp = NormalizeDouble(execEntry + minDist, (int)digits);
+    }
 
     request.action      = TRADE_ACTION_DEAL;
     request.symbol      = execSymbol;
@@ -595,26 +660,99 @@ void ExecuteTradeLocal()
 
     string commentStr = "ExecutionBot " + execSymbol + " " + pendingDirection;
     Log("OrderSend " + execSymbol + " " + pendingDirection + " lot=" + (string)lot
-        + " SL=" + (string)reqSl + " TP=" + (string)reqTp
+        + " SL=" + DoubleToString(reqSl, (int)digits) + " TP=" + DoubleToString(reqTp, (int)digits)
         + " dev=" + (string)Deviation + " magic=" + (string)MagicNumber + " fill=" + (string)fillMode);
 
-    if(!OrderSend(request, result))
+    int sendAttempts = 0;
+    int maxAttempts = 3;
+    double trySl = reqSl;
+    double tryTp = reqTp;
+    bool orderSuccess = false;
+    int lastErr = 0;
+    int lastRetcode = 0;
+    string lastComment = "";
+    ulong lastOrder = 0;
+    ulong lastDeal = 0;
+
+    while(sendAttempts < maxAttempts && !orderSuccess)
     {
-        int err = GetLastError();
-        Log("OrderSend returned false, error=" + (string)err);
-        ReportExecutionDetailed(pendingTradeId, "error", err, "OrderSend failed", 0, 0, execEntry, slippage, spread);
+        request.sl = trySl;
+        request.tp = tryTp;
+
+        if(OrderSend(request, result))
+        {
+            orderSuccess = true;
+            lastRetcode = (int)result.retcode;
+            lastComment = result.comment;
+            lastOrder = result.order;
+            lastDeal = result.deal;
+            break;
+        }
+
+        lastErr = GetLastError();
+        lastRetcode = (int)result.retcode;
+        lastComment = result.comment;
+        lastOrder = result.order;
+        lastDeal = result.deal;
+        sendAttempts++;
+
+        Log("OrderSend FAILED attempt=" + (string)sendAttempts + " err=" + (string)lastErr
+            + " retcode=" + (string)lastRetcode + " comment=" + lastComment
+            + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
+
+        if(lastErr == 4756 && sendAttempts < maxAttempts)
+        {
+            double backoff = minDist * (1.0 + sendAttempts * 0.5);
+            Log("OrderSend 4756 retry " + (string)sendAttempts + "/" + (string)maxAttempts + " backoff=" + DoubleToString(backoff, (int)digits));
+
+            if(pendingDirection == "BUY")
+            {
+                trySl = NormalizeDouble(currentPrice - backoff, (int)digits);
+                tryTp = NormalizeDouble(currentPrice + backoff, (int)digits);
+            }
+            else
+            {
+                trySl = NormalizeDouble(currentPrice + backoff, (int)digits);
+                tryTp = NormalizeDouble(currentPrice - backoff, (int)digits);
+            }
+
+            // Re-validate SL/TP direction after backoff adjustment
+            if(pendingDirection == "SELL" && trySl <= currentPrice)
+                trySl = NormalizeDouble(currentPrice + minDist, (int)digits);
+            if(pendingDirection == "BUY" && trySl >= currentPrice)
+                trySl = NormalizeDouble(currentPrice - minDist, (int)digits);
+            if(pendingDirection == "SELL" && tryTp >= currentPrice)
+                tryTp = NormalizeDouble(currentPrice - minDist, (int)digits);
+            if(pendingDirection == "BUY" && tryTp <= currentPrice)
+                tryTp = NormalizeDouble(currentPrice + minDist, (int)digits);
+
+            Sleep(500);
+            continue;
+        }
+
+        ReportExecutionDetailed(pendingTradeId, "error", lastErr, "OrderSend failed", 0, 0, execEntry, slippage, spread);
         currentState = STATE_ERROR;
-        Comment("FAILED\nOrderSend failed err=" + (string)err);
+        Comment("FAILED\nOrderSend failed err=" + (string)lastErr);
         return;
     }
 
-    Log("retcode=" + (string)result.retcode + " comment=" + result.comment
-        + " order=" + (string)result.order + " deal=" + (string)result.deal);
-
-    if(result.retcode == TRADE_RETCODE_DONE)
+    if(!orderSuccess)
     {
-        ReportExecutionDetailed(pendingTradeId, "executed", (int)result.retcode, "OK",
-                                (long)result.order, (long)result.deal, execEntry, slippage, spread);
+        Log("OrderSend failed after " + (string)maxAttempts + " attempts. Last err=" + (string)lastErr
+            + " retcode=" + (string)lastRetcode + " comment=" + lastComment);
+        ReportExecutionDetailed(pendingTradeId, "error", 4756, "OrderSend failed after retries", 0, 0, execEntry, slippage, spread);
+        currentState = STATE_ERROR;
+        Comment("FAILED\nOrderSend failed after retries");
+        return;
+    }
+
+    Log("OrderSend SUCCESS retcode=" + (string)lastRetcode + " comment=" + lastComment
+        + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
+
+    if(lastRetcode == TRADE_RETCODE_DONE)
+    {
+        ReportExecutionDetailed(pendingTradeId, "executed", lastRetcode, "OK",
+                                (long)lastOrder, (long)lastDeal, execEntry, slippage, spread);
         currentState = STATE_EXECUTED;
         Comment("EXECUTED\n" + commentStr + "\nEntry=" + DoubleToString(execEntry, (int)digits)
                 + "\nSlippage=" + DoubleToString(slippage, (int)digits));
@@ -623,10 +761,10 @@ void ExecuteTradeLocal()
     }
     else
     {
-        ReportExecutionDetailed(pendingTradeId, "error", (int)result.retcode, result.comment,
-                                (long)result.order, (long)result.deal, execEntry, slippage, spread);
+        ReportExecutionDetailed(pendingTradeId, "error", lastRetcode, lastComment,
+                                (long)lastOrder, (long)lastDeal, execEntry, slippage, spread);
         currentState = STATE_ERROR;
-        Comment("FAILED\n" + result.comment);
+        Comment("FAILED\n" + lastComment);
     }
 }
 
