@@ -75,7 +75,7 @@ bool EnsureSymbol(string symbol)
 {
     if(symbol == "") return false;
     long sel = SymbolInfoInteger(symbol, SYMBOL_SELECT);
-    if(sel == 0) return true;
+    if(sel != 0) return true;
     if(SymbolSelect(symbol, true)) return true;
     return false;
 }
@@ -1174,21 +1174,35 @@ void ReportSymbolInfoFor(string symbol)
     double vol_step     = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
     double tick_value   = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
     double stops_level  = (double)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    double freeze_level = (double)SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
     long   filling      = SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
     long   visible      = SymbolInfoInteger(symbol, SYMBOL_VISIBLE);
     long   trade_mode   = SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
     double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
     double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
 
+    Log("[SymbolDebug] ChartSymbol=" + _Symbol + " Requested=" + symbol + " Selected=" + (string)SymbolInfoInteger(symbol, SYMBOL_SELECT)
+        + " Digits=" + (string)digits + " Point=" + DoubleToString(point, 8)
+        + " Bid=" + DoubleToString(bid, 5) + " Ask=" + DoubleToString(ask, 5)
+        + " TradeMode=" + (string)trade_mode
+        + " VolMin=" + DoubleToString(vol_min, 2) + " VolMax=" + DoubleToString(vol_max, 2) + " VolStep=" + DoubleToString(vol_step, 4));
+
+    if(digits == 0 || point == 0.0 || bid == 0.0 || ask == 0.0)
+    {
+        Log("ReportSymbolInfoFor: INVALID symbol data for " + symbol + " — not reporting.");
+        return;
+    }
+
     string payload = StringFormat(
         "{\"symbol\":\"%s\",\"digits\":%d,\"point\":%.8f,"
         "\"volume_min\":%.2f,\"volume_max\":%.2f,\"volume_step\":%.4f,"
         "\"trade_tick_value\":%.6f,\"trade_stops_level\":%.0f,"
+        "\"trade_freeze_level\":%.0f,"
         "\"filling_mode\":%d,\"visible\":%d,\"trade_mode\":%d,"
         "\"bid\":%.5f,\"ask\":%.5f}",
         symbol, (int)digits, point,
         vol_min, vol_max, vol_step,
-        tick_value, stops_level,
+        tick_value, stops_level, freeze_level,
         (int)filling, (int)visible, (int)trade_mode,
         bid, ask
     );
@@ -1202,6 +1216,20 @@ void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf)
 {
     if(symbol == "" || tf == 0)
         return;
+
+    if(!EnsureSymbol(symbol))
+    {
+        Log("ReportCandleFor: symbol '" + symbol + "' not available");
+        return;
+    }
+
+    long digits = SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    if(digits == 0 || point == 0.0)
+    {
+        Log("ReportCandleFor: INVALID symbol data for " + symbol + " digits=" + (string)digits + " point=" + DoubleToString(point, 8));
+        return;
+    }
 
     // Always send current and previous candle — no dedup.
     // The pre-flight check needs current candle data immediately,
@@ -1227,6 +1255,15 @@ void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf)
         double l = iLow(symbol, tf, shift);
         double c = iClose(symbol, tf, shift);
         long   v = (long)iVolume(symbol, tf, shift);
+
+        datetime serverTime = TimeCurrent();
+        Log("[TimeDebug] Symbol=" + symbol + " TF=" + tfName + " Shift=" + (string)shift
+            + " MT5Time=" + TimeToString(serverTime)
+            + " BarOpen=" + TimeToString(t)
+            + " BarClose=" + TimeToString(t + (datetime)(PeriodSeconds(tf)))
+            + " SecondsToClose=" + (string)((int)((t + (datetime)(PeriodSeconds(tf)) - serverTime)))
+            + " UTC=" + TimeToString(TimeGMT())
+            + " Nairobi=" + TimeToString(serverTime + (datetime)(3 * 3600)));
 
         string payload = StringFormat(
             "{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"tick_volume\":%d,\"shift\":%d}",
