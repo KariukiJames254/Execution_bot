@@ -825,7 +825,7 @@ function refreshData() {
 
     if (armedActions) armedActions.style.display = pending.status === 'armed' ? '' : 'none';
     if (cancelledActions) cancelledActions.style.display = pending.status === 'cancelled' ? '' : 'none';
-    if (errorActions) errorActions.style.display = pending.status === 'error' ? '' : 'none';
+    if (errorActions) errorActions.style.display = (pending.status === 'error' || pending.status === 'market_closed') ? '' : 'none';
     if (countdownEl) countdownEl.style.display = pending.status === 'armed' ? '' : 'none';
     if (countdownLabel) countdownLabel.style.display = pending.status === 'armed' ? '' : 'none';
 
