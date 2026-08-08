@@ -13,6 +13,10 @@
 #property version   "5.00"
 #property strict
 
+#ifndef TRADE_RETCODE_MARKET_CLOSED
+#define TRADE_RETCODE_MARKET_CLOSED 10018
+#endif
+
 input string FlaskURL     = "http://102.203.116.146:5000";  // VPS Flask API endpoint
 input bool   TEST_MODE    = false;
 input long   MagicNumber  = 123456;   // Configurable magic number
@@ -663,6 +667,20 @@ void ExecuteTradeLocal()
         + " SL=" + DoubleToString(reqSl, (int)digits) + " TP=" + DoubleToString(reqTp, (int)digits)
         + " dev=" + (string)Deviation + " magic=" + (string)MagicNumber + " fill=" + (string)fillMode);
 
+    long tradeMode = SymbolInfoInteger(execSymbol, SYMBOL_TRADE_MODE);
+    long terminalTradeAllowed = TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
+    Log("ExecuteTradeLocal: tradeMode=" + (string)tradeMode + " terminalTradeAllowed=" + (string)terminalTradeAllowed
+        + " serverTime=" + TimeToString(TimeCurrent()));
+
+    if(tradeMode == 0 || (pendingDirection == "BUY" && tradeMode == 2) || (pendingDirection == "SELL" && tradeMode == 1))
+    {
+        Log("ExecuteTradeLocal: MARKET CLOSED or direction not allowed. tradeMode=" + (string)tradeMode + " direction=" + pendingDirection);
+        ReportExecutionDetailed(pendingTradeId, "market_closed", (int)TRADE_RETCODE_MARKET_CLOSED, "Market closed or trading not allowed for this direction", 0, 0, execEntry, slippage, spread);
+        currentState = STATE_ERROR;
+        Comment("FAILED\nMarket closed");
+        return;
+    }
+
     int sendAttempts = 0;
     int maxAttempts = 3;
     double trySl = reqSl;
@@ -728,6 +746,15 @@ void ExecuteTradeLocal()
 
             Sleep(500);
             continue;
+        }
+
+        if(lastErr == TRADE_RETCODE_MARKET_CLOSED || lastRetcode == TRADE_RETCODE_MARKET_CLOSED)
+        {
+            Log("ExecuteTradeLocal: MARKET CLOSED (retcode=" + (string)lastRetcode + "). Not retrying.");
+            ReportExecutionDetailed(pendingTradeId, "market_closed", (int)TRADE_RETCODE_MARKET_CLOSED, "Market closed", (long)lastOrder, (long)lastDeal, execEntry, slippage, spread);
+            currentState = STATE_ERROR;
+            Comment("FAILED\nMarket closed");
+            return;
         }
 
         ReportExecutionDetailed(pendingTradeId, "error", lastErr, "OrderSend failed", 0, 0, execEntry, slippage, spread);
