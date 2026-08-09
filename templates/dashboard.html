@@ -185,6 +185,14 @@ h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25p
     <label>Open P&L</label>
     <div class="value" id="total_pnl">$0.00</div>
   </div>
+  <div class="card">
+    <label>Open Positions</label>
+    <div class="value" id="open_positions">{{ open_positions or 0 }} / {{ max_open_positions or 5 }}</div>
+  </div>
+  <div class="card">
+    <label>Total Open Risk</label>
+    <div class="value" id="total_open_risk">${{ '{:,.2f}'.format(total_open_risk or 0) }} / ${{ '{:,.2f}'.format(max_total_open_risk or 1550) }}</div>
+  </div>
 </div>
 
 <h2>Open Positions</h2>
@@ -221,6 +229,11 @@ h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25p
   <div class="input-card">
     <label>Break Even Trigger (R)</label>
     <input type="number" id="be_rr" value="{{ be_rr }}" step="0.1" min="0.1" oninput="updateSettings()" {% if pending_trade and pending_trade.status == 'armed' %}disabled{% endif %}>
+  </div>
+  <div class="input-card">
+    <label>Manual Stop Loss</label>
+    <input type="number" id="manual_sl" step="0.00001" oninput="recalculateFromSL()" {% if pending_trade and pending_trade.status == 'armed' %}disabled{% endif %}>
+    <div style="font-size:11px;color:#8b949e;margin-top:4px;">Leave empty to use candle boundary</div>
   </div>
 </div>
 
@@ -261,7 +274,7 @@ h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25p
       <div class="value blue" id="pending_entry">{{ '%.5f'|format(pending_trade.entry) }}</div>
     </div>
     <div class="card">
-      <label>SL</label>
+      <label>Manual SL</label>
       <div class="value red" id="pending_sl">{{ '%.5f'|format(pending_trade.sl) }}</div>
     </div>
     <div class="card">
@@ -508,6 +521,53 @@ function updateSettings() {
   });
 }
 
+function recalculateFromSL() {
+  var symbol = getSelectedSymbol();
+  var direction = document.getElementById('armed_direction') ? document.getElementById('armed_direction').textContent.trim() : 'BUY';
+  var sl = parseFloat(document.getElementById('manual_sl').value);
+  var risk = parseFloat(document.getElementById('risk_amount').value) || 100;
+  var rr = parseFloat(document.getElementById('rr_ratio').value) || 2;
+  
+  if (!sl || !symbol) return;
+  
+  fetch('/api/candle_data', {
+    headers: { 'X-Symbol': symbol }
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error || !data.close) return;
+    
+    fetch('/api/preview_trade', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Symbol': symbol
+      },
+      body: JSON.stringify({
+        symbol: symbol,
+        direction: direction,
+        close: data.close,
+        manual_sl: sl,
+        risk_amount: risk,
+        rr_ratio: rr,
+      })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(preview) {
+      if (preview.error) return;
+      var lotEl = document.getElementById('pending_lot');
+      var tpEl = document.getElementById('pending_tp');
+      var distEl = document.getElementById('pending_distance');
+      var profitEl = document.getElementById('pending_profit');
+      if (lotEl) lotEl.textContent = preview.lot.toFixed(2);
+      if (tpEl) tpEl.textContent = preview.tp.toFixed(5);
+      if (distEl) distEl.textContent = preview.distance_pips.toFixed(1) + ' pips';
+      if (profitEl) profitEl.textContent = '$' + (preview.risk_amount * preview.rr_ratio).toFixed(2);
+    })
+    .catch(function(err) { console.error('preview error', err); });
+  });
+}
+
 function refreshPreflight() {
   var symbol = getSelectedSymbol();
   fetch('/api/preflight', {
@@ -551,8 +611,9 @@ function armTrade(direction) {
   var rr = parseFloat(document.getElementById('rr_ratio').value) || 2;
   var beRr = parseFloat(document.getElementById('be_rr').value) || 1;
   var riskMode = document.querySelector('input[name="risk_mode"]:checked') ? document.querySelector('input[name="risk_mode"]:checked').value : 'amt';
-
-  console.log('armTrade vars', { symbol: symbol, riskAmt: riskAmt, connected: isConnected() });
+  var manualSl = document.getElementById('manual_sl').value;
+  
+  console.log('armTrade vars', { symbol: symbol, riskAmt: riskAmt, manualSl: manualSl, connected: isConnected() });
 
   if (!isConnected()) {
     updateStatus('MT5 is not connected. Please reconnect.');
@@ -584,7 +645,7 @@ function armTrade(direction) {
       return;
     }
     updateStatus(direction + ' trade: fetching candle data...');
-    fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode);
+    fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode, manualSl);
   })
   .catch(function(err) {
     console.error('preflight check failed', err);
@@ -593,7 +654,7 @@ function armTrade(direction) {
   });
 }
 
-function fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode) {
+function fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode, manualSl) {
   var candleRetryCount = 0;
 
   function doFetch() {
@@ -635,13 +696,14 @@ function fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode) {
             risk_mode: riskMode,
             rr_ratio: rr,
             be_rr: beRr,
+            manual_sl: manualSl || '',
           })
         })
         .then(function(r) {
           if (r.status === 409) {
             return r.json().then(function(prepData) {
               updateStatus('Waiting for EA data. Retrying...');
-              setTimeout(function() { fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode); }, 1000);
+              setTimeout(function() { fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode, manualSl); }, 1000);
               return null;
             });
           }
@@ -656,6 +718,7 @@ function fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode) {
             setButtonsDisabled(false);
             return;
           }
+          console.log('[UI][ARM_SUCCESS] trade_id=' + prepData.trade_id + ' status=' + prepData.status + ' symbol=' + prepData.symbol + ' direction=' + prepData.direction + ' entry=' + prepData.entry + ' sl=' + prepData.sl + ' tp=' + prepData.tp + ' lot=' + prepData.lot);
           pendingDirection = direction;
           updateStatus(direction + ' trade armed. Waiting for candle close...');
           window.location.href = '?trade_id=' + encodeURIComponent(prepData.trade_id) + '&symbol=' + encodeURIComponent(symbol);
@@ -786,28 +849,40 @@ function refreshData() {
     headers: { 'X-Symbol': symbol }
   })
   .then(function(r) { return r.json(); })
-  .then(function(data) {
-    var statusEl = document.getElementById('conn_status');
-    if (statusEl) {
-      statusEl.innerHTML = '<span class="status-dot ' + (data.connected ? 'status-connected' : 'status-disconnected') + '"></span>' + (data.connected ? 'Connected' : 'Disconnected');
-      statusEl.className = 'value ' + (data.connected ? 'green' : 'red');
-    }
-    document.getElementById('balance').textContent = data.balance ? '$' + data.balance.toFixed(2) : '---';
-    document.getElementById('equity').textContent = data.equity ? '$' + data.equity.toFixed(2) : '---';
-    if (data.bid) {
-      cachedBid = data.bid;
-      cachedAsk = data.ask;
-      document.getElementById('bid').textContent = data.bid.toFixed(5);
-      document.getElementById('ask').textContent = data.ask.toFixed(5);
-      document.getElementById('spread').textContent = ((data.ask - data.bid) * 10000).toFixed(1) + ' pips';
+   .then(function(data) {
+     console.log('[UI][STATUS_RESPONSE]', data);
+     var statusEl = document.getElementById('conn_status');
+     if (statusEl) {
+       statusEl.innerHTML = '<span class="status-dot ' + (data.connected ? 'status-connected' : 'status-disconnected') + '"></span>' + (data.connected ? 'Connected' : 'Disconnected');
+       statusEl.className = 'value ' + (data.connected ? 'green' : 'red');
+     }
+     document.getElementById('balance').textContent = data.balance ? '$' + data.balance.toFixed(2) : '---';
+     document.getElementById('equity').textContent = data.equity ? '$' + data.equity.toFixed(2) : '---';
+     if (data.bid) {
+       cachedBid = data.bid;
+       cachedAsk = data.ask;
+       document.getElementById('bid').textContent = data.bid.toFixed(5);
+       document.getElementById('ask').textContent = data.ask.toFixed(5);
+       document.getElementById('spread').textContent = ((data.ask - data.bid) * 10000).toFixed(1) + ' pips';
+     }
+
+     var pending = data.pending_trade || {};
+     console.log('[UI][PENDING_TRADE] status=' + pending.status + ' trade_id=' + (pending.trade_id || 'none') + ' symbol=' + (pending.symbol || 'none') + ' direction=' + (pending.direction || 'none'));
+
+     if (pending.status === 'armed' || data.open_positions > 0) {
+       setButtonsDisabled(true);
+     } else {
+       setButtonsDisabled(false);
+     }
+
+    var openPositionsEl = document.getElementById('open_positions');
+    if (openPositionsEl) {
+      openPositionsEl.textContent = (data.open_positions || 0) + ' / ' + (data.max_open_positions || 5);
     }
 
-    var pending = data.pending_trade || {};
-    
-    if (pending.status === 'armed' || data.open_positions > 0) {
-      setButtonsDisabled(true);
-    } else {
-      setButtonsDisabled(false);
+    var totalRiskEl = document.getElementById('total_open_risk');
+    if (totalRiskEl) {
+      totalRiskEl.textContent = '$' + (data.total_open_risk || 0).toFixed(2) + ' / $' + (data.max_total_open_risk || 1550).toFixed(2);
     }
     
     if (!countdownInterval) countdownInterval = setInterval(refreshData, 1000);

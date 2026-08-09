@@ -50,6 +50,9 @@ double pendingEntry = 0;
 double pendingRiskDistance = 0;
 double pendingBeRr = 0;
 double pendingBeTrigger = 0;
+double pendingManualSl = 0;
+double pendingRiskAmount = 310.0;
+double pendingRrRatio = 5.0;
 bool breakEvenApplied = false;
 datetime lastBeAttemptTime = 0;
 
@@ -69,6 +72,18 @@ ENUM_TIMEFRAMES _PeriodToTf(int tf_minutes)
    else if(tf_minutes <= 60) return PERIOD_H1;
    else if(tf_minutes <= 240) return PERIOD_H4;
    else return PERIOD_D1;
+}
+
+string TimeframeToString(ENUM_TIMEFRAMES tf)
+{
+   if(tf == PERIOD_M1) return "M1";
+   if(tf == PERIOD_M5) return "M5";
+   if(tf == PERIOD_M15) return "M15";
+   if(tf == PERIOD_M30) return "M30";
+   if(tf == PERIOD_H1) return "H1";
+   if(tf == PERIOD_H4) return "H4";
+   if(tf == PERIOD_D1) return "D1";
+   return "UNKNOWN";
 }
 
 bool EnsureSymbol(string symbol)
@@ -110,6 +125,9 @@ void _cleanupTrade()
     pendingRiskDistance = 0;
     pendingBeRr        = 0;
     pendingBeTrigger   = 0;
+    pendingManualSl    = 0;
+    pendingRiskAmount  = 310.0;
+    pendingRrRatio     = 5.0;
     breakEvenApplied   = false;
     trackedTradeId     = "";
     candleCloseTime    = 0;
@@ -118,6 +136,56 @@ void _cleanupTrade()
     armedSymbol        = "";
     armedTfMinutes     = 15;
     Comment("");
+}
+
+void LogTimeDiagnostics(string symbol, ENUM_TIMEFRAMES tf)
+{
+    if(symbol == "" || tf == 0) return;
+
+    datetime now = TimeCurrent();
+    datetime timeLocal = TimeLocal();
+    datetime timeServer = TimeTradeServer();
+    datetime timeGMT = TimeGMT();
+
+    MqlTick tick;
+    datetime tickTime = 0;
+    double tickBid = 0;
+    double tickAsk = 0;
+    if(SymbolInfoTick(symbol, tick))
+    {
+        tickTime = (datetime)tick.time;
+        tickBid = tick.bid;
+        tickAsk = tick.ask;
+    }
+
+    datetime bar0 = iTime(symbol, tf, 0);
+    datetime bar1 = iTime(symbol, tf, 1);
+    long synced = 0;
+    long barsCount = 0;
+    if(bar0 > 0)
+    {
+        synced = SeriesInfoInteger(symbol, tf, SERIES_SYNCHRONIZED);
+        barsCount = Bars(symbol, tf);
+    }
+
+    long periodSeconds = PeriodSeconds(tf);
+    datetime barClose0 = (bar0 > 0) ? (bar0 + periodSeconds) : 0;
+    long secondsToClose = (barClose0 > 0) ? (long)(barClose0 - now) : 0;
+
+    Log("[TimeDiagnostic] Symbol=" + symbol + " TF=" + TimeframeToString(tf) +
+        " TimeCurrent=" + TimeToString(now) +
+        " TimeLocal=" + TimeToString(timeLocal) +
+        " TimeTradeServer=" + TimeToString(timeServer) +
+        " TimeGMT=" + TimeToString(timeGMT) +
+        " TickTime=" + (tickTime > 0 ? TimeToString(tickTime) : "N/A") +
+        " TickBid=" + DoubleToString(tickBid, 5) +
+        " TickAsk=" + DoubleToString(tickAsk, 5) +
+        " Bar0=" + (bar0 > 0 ? TimeToString(bar0) : "N/A") +
+        " Bar1=" + (bar1 > 0 ? TimeToString(bar1) : "N/A") +
+        " BarClose0=" + (barClose0 > 0 ? TimeToString(barClose0) : "N/A") +
+        " SecondsToClose=" + (string)secondsToClose +
+        " SeriesSynced=" + (string)synced +
+        " BarsCount=" + (string)barsCount);
 }
 
 int OnInit()
@@ -329,6 +397,7 @@ void OnTimer()
 
     if(tradeId == "" || status == "")
     {
+        Log("[TradeLifecycle][EA_PENDING_EMPTY] tradeId=empty status=empty symbol=" + eaSymbol + " trackedTradeId=" + trackedTradeId);
         // Even if no trade armed, check for close requests
         string closeTicketStr = Trim(ExtractJsonValue(response, "close_ticket"));
         long closeTicket = 0;
@@ -370,8 +439,21 @@ void OnTimer()
         pendingRiskDistance = MathAbs(pendingEntry - pendingSl);
         pendingBeRr   = StringToDouble(ExtractJsonValue(response, "be_rr"));
         pendingBeTrigger = StringToDouble(ExtractJsonValue(response, "be_trigger"));
+        pendingManualSl    = StringToDouble(ExtractJsonValue(response, "manual_sl"));
+        pendingRiskAmount  = StringToDouble(ExtractJsonValue(response, "risk_amount"));
+        if(pendingRiskAmount <= 0) pendingRiskAmount = 310.0;
+        pendingRrRatio     = StringToDouble(ExtractJsonValue(response, "rr_ratio"));
+        if(pendingRrRatio <= 0) pendingRrRatio = 5.0;
         breakEvenApplied = false;
         pendingSymbol = (targetSymbol != "" ? targetSymbol : tradeSymbol);
+
+        Log("[CandlePipeline][EA_RECEIVED] tradeId=" + tradeId + " symbol=" + pendingSymbol + " direction=" + direction +
+            " candle_time=" + candleTimeStr + " timeframe=" + timeframe +
+            " entry=" + DoubleToString(pendingEntry, (int)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS)) +
+            " sl=" + DoubleToString(pendingSl, (int)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS)) +
+            " manual_sl=" + DoubleToString(pendingManualSl, (int)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS)) +
+            " tp=" + DoubleToString(pendingTp, (int)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS)) +
+            " risk=" + DoubleToString(pendingRiskAmount, 2) + " rr=" + DoubleToString(pendingRrRatio, 2));
 
         trackedTradeId   = tradeId;
         pendingTradeId   = tradeId;
@@ -471,10 +553,32 @@ void OnTimer()
         bool barChanged  = (currentBarTime != armedBarTime);
         bool timeReached = (now >= candleCloseTime);
 
-        Log("CHECK tradeId=" + trackedTradeId + " barChanged=" + (string)barChanged
-            + " timeReached=" + (string)timeReached + " now=" + (string)now + " close=" + (string)candleCloseTime);
+        long barAgeSeconds = 0;
+        if(currentBarTime > 0)
+            barAgeSeconds = (long)(now - currentBarTime);
+        long maxExpectedAge = (long)armedTfMinutes * 2 * 60;
+        bool staleBar = (barAgeSeconds > maxExpectedAge);
+        if(staleBar)
+        {
+            Log("CHECK STALE BAR tradeId=" + trackedTradeId + " barAge=" + (string)barAgeSeconds + "s now=" + TimeToString(now) + " barOpen=" + TimeToString(currentBarTime));
+            LogTimeDiagnostics(armedSymbol, _PeriodToTf(armedTfMinutes));
+        }
 
-        if(barChanged || timeReached)
+        Log("CHECK tradeId=" + trackedTradeId + " barChanged=" + (string)barChanged
+            + " timeReached=" + (string)timeReached + " now=" + TimeToString(now) + " close=" + TimeToString((datetime)candleCloseTime)
+            + " staleBar=" + (string)staleBar + " currentBar=" + TimeToString(currentBarTime)
+            + " previousBar=" + TimeToString(iTime(armedSymbol, _PeriodToTf(armedTfMinutes), 1))
+            + " serverTime=" + TimeToString(TimeTradeServer()) + " localTime=" + TimeToString(TimeLocal())
+            + " gmtTime=" + TimeToString(TimeGMT()));
+
+        if(staleBar)
+        {
+            Log("STALE_BAR_BLOCKED tradeId=" + trackedTradeId + " — execution blocked, waiting for synchronized market data");
+            ReportExecutionDetailed(pendingTradeId, "stale_bar", 1, "Stale candle data detected, execution blocked", 0, 0, 0, 0, 0);
+            int remaining = (int)(candleCloseTime - now);
+            Comment("STALE BAR\nExecution Blocked\nCheck data feed\n" + armedSymbol + "\nBar age: " + (string)barAgeSeconds + "s");
+        }
+        else if(barChanged || timeReached)
         {
             Log("EXECUTE: candle closed — executing OrderSend locally");
             ExecuteTradeLocal();
@@ -541,41 +645,62 @@ void ExecuteTradeLocal()
     lot = MathMax(lot, lotMin);
     lot = MathMin(lot, lotMax);
 
-    double reqSl = pendingSl;
+    double execEntry = (pendingDirection == "BUY") ? tick.ask : tick.bid;
+    double reqSl = (pendingManualSl > 0) ? pendingManualSl : pendingSl;
     double reqTp = pendingTp;
+    double riskDistance = MathAbs(execEntry - reqSl);
 
-    double minDist = MathMax(slLevel * 2, point * 20);
+    if(riskDistance > 0 && pendingRrRatio > 0)
+    {
+        if(pendingDirection == "BUY")
+        {
+            reqTp = NormalizeDouble(execEntry + riskDistance * pendingRrRatio, (int)digits);
+        }
+        else
+        {
+            reqTp = NormalizeDouble(execEntry - riskDistance * pendingRrRatio, (int)digits);
+        }
+    }
+
+    if(riskDistance > 0 && pendingRiskAmount > 0)
+    {
+        double tickValue = SymbolInfoDouble(execSymbol, SYMBOL_TRADE_TICK_VALUE);
+        double tickSize = SymbolInfoDouble(execSymbol, SYMBOL_TRADE_TICK_SIZE);
+        double lossPerLot = 0;
+
+        if(tickSize > 0 && tickValue > 0)
+        {
+            double distanceTicks = riskDistance / tickSize;
+            lossPerLot = tickValue * distanceTicks;
+        }
+
+        if(lossPerLot <= 0 && point > 0 && tickValue > 0)
+        {
+            double distancePoints = riskDistance / point;
+            lossPerLot = tickValue * distancePoints;
+        }
+
+        if(lossPerLot > 0)
+        {
+            double calcLot = pendingRiskAmount / lossPerLot;
+            calcLot = MathFloor(calcLot / lotStep) * lotStep;
+            calcLot = MathMax(calcLot, lotMin);
+            calcLot = MathMin(calcLot, lotMax);
+            lot = calcLot;
+        }
+    }
+
+    double minDist = MathMax(slLevel, point * 10);
     double currentPrice = (pendingDirection == "BUY") ? tick.ask : tick.bid;
     double originalSl = reqSl;
     double originalTp = reqTp;
 
     Log("ExecuteTradeLocal: bid=" + DoubleToString(tick.bid, (int)digits) + " ask=" + DoubleToString(tick.ask, (int)digits) + " slLevel=" + (string)slLevel + " minDist=" + DoubleToString(minDist, (int)digits));
 
-    // Recalculate SL/TP based on actual execution price and original risk distance
-    // This ensures SL/TP are valid even if price moved since arming
-    double execEntry = (pendingDirection == "BUY") ? tick.ask : tick.bid;
-    if(pendingRiskDistance > 0)
-    {
-        if(pendingDirection == "BUY")
-        {
-            reqSl = NormalizeDouble(execEntry - pendingRiskDistance, (int)digits);
-            reqTp = NormalizeDouble(execEntry + pendingRiskDistance * 5.0, (int)digits);
-        }
-        else
-        {
-            reqSl = NormalizeDouble(execEntry + pendingRiskDistance, (int)digits);
-            reqTp = NormalizeDouble(execEntry - pendingRiskDistance * 5.0, (int)digits);
-        }
-        Log("ExecuteTradeLocal: Recalculated SL/TP from risk distance. origEntry=" + DoubleToString(pendingEntry, (int)digits) + " execEntry=" + DoubleToString(execEntry, (int)digits) + " riskDist=" + DoubleToString(pendingRiskDistance, (int)digits) + " newSL=" + DoubleToString(reqSl, (int)digits) + " newTP=" + DoubleToString(reqTp, (int)digits));
-    }
+    Log("ExecuteTradeLocal: ManualSL=" + DoubleToString(pendingManualSl, (int)digits) + " execEntry=" + DoubleToString(execEntry, (int)digits) + " riskDist=" + DoubleToString(riskDistance, (int)digits) + " riskAmt=" + DoubleToString(pendingRiskAmount, 2) + " RR=" + DoubleToString(pendingRrRatio, 2) + " calcLot=" + DoubleToString(lot, 2));
 
     if(pendingDirection == "BUY")
     {
-        if(reqSl > currentPrice - minDist)
-        {
-            Log("ExecuteTradeLocal: Broker SL adjustment pendingSl=" + DoubleToString(reqSl, (int)digits) + " -> " + DoubleToString(currentPrice - minDist, (int)digits));
-            reqSl = NormalizeDouble(currentPrice - minDist, (int)digits);
-        }
         if(reqTp <= currentPrice + minDist)
         {
             Log("ExecuteTradeLocal: Broker TP adjustment pendingTp=" + DoubleToString(reqTp, (int)digits) + " -> " + DoubleToString(currentPrice + minDist, (int)digits));
@@ -584,11 +709,6 @@ void ExecuteTradeLocal()
     }
     else  // SELL
     {
-        if(reqSl < currentPrice + minDist)
-        {
-            Log("ExecuteTradeLocal: Broker SL adjustment pendingSl=" + DoubleToString(reqSl, (int)digits) + " -> " + DoubleToString(currentPrice + minDist, (int)digits));
-            reqSl = NormalizeDouble(currentPrice + minDist, (int)digits);
-        }
         if(reqTp >= currentPrice - minDist)
         {
             Log("ExecuteTradeLocal: Broker TP adjustment pendingTp=" + DoubleToString(reqTp, (int)digits) + " -> " + DoubleToString(currentPrice - minDist, (int)digits));
@@ -617,14 +737,20 @@ void ExecuteTradeLocal()
     // Validate SL direction for SELL: SL must be ABOVE entry
     if(pendingDirection == "SELL" && reqSl <= execEntry)
     {
-        Log("ExecuteTradeLocal: INVALID SL for SELL - SL must be above entry. Adjusting SL.");
-        reqSl = NormalizeDouble(execEntry + minDist, (int)digits);
+        Log("ExecuteTradeLocal: INVALID SL for SELL - SL must be above entry. Rejecting trade.");
+        ReportExecutionDetailed(pendingTradeId, "error", 1, "Invalid SL for SELL: SL must be above entry", 0, 0, execEntry, 0, 0);
+        currentState = STATE_ERROR;
+        Comment("FAILED\nInvalid SL");
+        return;
     }
     // Validate SL direction for BUY: SL must be BELOW entry
     if(pendingDirection == "BUY" && reqSl >= execEntry)
     {
-        Log("ExecuteTradeLocal: INVALID SL for BUY - SL must be below entry. Adjusting SL.");
-        reqSl = NormalizeDouble(execEntry - minDist, (int)digits);
+        Log("ExecuteTradeLocal: INVALID SL for BUY - SL must be below entry. Rejecting trade.");
+        ReportExecutionDetailed(pendingTradeId, "error", 1, "Invalid SL for BUY: SL must be below entry", 0, 0, execEntry, 0, 0);
+        currentState = STATE_ERROR;
+        Comment("FAILED\nInvalid SL");
+        return;
     }
 
     // Validate TP direction for SELL: TP must be BELOW entry
@@ -666,6 +792,11 @@ void ExecuteTradeLocal()
     Log("OrderSend " + execSymbol + " " + pendingDirection + " lot=" + (string)lot
         + " SL=" + DoubleToString(reqSl, (int)digits) + " TP=" + DoubleToString(reqTp, (int)digits)
         + " dev=" + (string)Deviation + " magic=" + (string)MagicNumber + " fill=" + (string)fillMode);
+
+    Log("[TradeLifecycle][EXECUTION_ATTEMPT] tradeId=" + pendingTradeId + " symbol=" + execSymbol + " direction=" + pendingDirection +
+        " entry=" + DoubleToString(execEntry, (int)digits) + " sl=" + DoubleToString(reqSl, (int)digits) +
+        " tp=" + DoubleToString(reqTp, (int)digits) + " lot=" + DoubleToString(lot, 2) +
+        " manual_sl=" + DoubleToString(pendingManualSl, (int)digits) + " risk=" + DoubleToString(pendingRiskAmount, 2));
 
     long tradeMode = SymbolInfoInteger(execSymbol, SYMBOL_TRADE_MODE);
     long terminalTradeAllowed = TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
@@ -720,30 +851,7 @@ void ExecuteTradeLocal()
 
         if(lastErr == 4756 && sendAttempts < maxAttempts)
         {
-            double backoff = minDist * (1.0 + sendAttempts * 0.5);
-            Log("OrderSend 4756 retry " + (string)sendAttempts + "/" + (string)maxAttempts + " backoff=" + DoubleToString(backoff, (int)digits));
-
-            if(pendingDirection == "BUY")
-            {
-                trySl = NormalizeDouble(currentPrice - backoff, (int)digits);
-                tryTp = NormalizeDouble(currentPrice + backoff, (int)digits);
-            }
-            else
-            {
-                trySl = NormalizeDouble(currentPrice + backoff, (int)digits);
-                tryTp = NormalizeDouble(currentPrice - backoff, (int)digits);
-            }
-
-            // Re-validate SL/TP direction after backoff adjustment
-            if(pendingDirection == "SELL" && trySl <= currentPrice)
-                trySl = NormalizeDouble(currentPrice + minDist, (int)digits);
-            if(pendingDirection == "BUY" && trySl >= currentPrice)
-                trySl = NormalizeDouble(currentPrice - minDist, (int)digits);
-            if(pendingDirection == "SELL" && tryTp >= currentPrice)
-                tryTp = NormalizeDouble(currentPrice - minDist, (int)digits);
-            if(pendingDirection == "BUY" && tryTp <= currentPrice)
-                tryTp = NormalizeDouble(currentPrice + minDist, (int)digits);
-
+            Log("OrderSend 4756 retry " + (string)sendAttempts + "/" + (string)maxAttempts + " keeping original SL/TP");
             Sleep(500);
             continue;
         }
@@ -765,6 +873,7 @@ void ExecuteTradeLocal()
 
     if(!orderSuccess)
     {
+        Log("[TradeLifecycle][EXECUTION_FAILED] tradeId=" + pendingTradeId + " retcode=" + (string)lastRetcode + " comment=" + lastComment + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
         Log("OrderSend failed after " + (string)maxAttempts + " attempts. Last err=" + (string)lastErr
             + " retcode=" + (string)lastRetcode + " comment=" + lastComment);
         ReportExecutionDetailed(pendingTradeId, "error", 4756, "OrderSend failed after retries", 0, 0, execEntry, slippage, spread);
@@ -773,6 +882,11 @@ void ExecuteTradeLocal()
         return;
     }
 
+    Log("[TradeLifecycle][EXECUTION_SUCCESS] tradeId=" + pendingTradeId + " ticket=" + (string)lastOrder + " deal=" + (string)lastDeal +
+        " entry=" + DoubleToString(execEntry, (int)digits) + " sl=" + DoubleToString(reqSl, (int)digits) +
+        " tp=" + DoubleToString(reqTp, (int)digits) + " volume=" + DoubleToString(lot, 2) +
+        " retcode=" + (string)lastRetcode);
+    
     Log("OrderSend SUCCESS retcode=" + (string)lastRetcode + " comment=" + lastComment
         + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
 
@@ -1100,8 +1214,9 @@ void ReportMarket()
     string key1 = current + ":" + DoubleToString(tick.bid, (int)curDigits) + ":" + DoubleToString(tick.ask, (int)curDigits);
     if(key1 != lastMarketReport)
     {
-        string payload = StringFormat("{\"symbol\":\"%s\",\"bid\":%.5f,\"ask\":%.5f}",
-            current, tick.bid, tick.ask);
+        long synced = SeriesInfoInteger(current, 0, SERIES_SYNCHRONIZED);
+        string payload = StringFormat("{\"symbol\":\"%s\",\"bid\":%.5f,\"ask\":%.5f,\"tick_time\":%d,\"series_synced\":%d}",
+            current, tick.bid, tick.ask, (long)tick.time, synced);
         SendPostRequest(url, payload, response);
         lastMarketReport = key1;
     }
@@ -1257,13 +1372,18 @@ void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf)
         long   v = (long)iVolume(symbol, tf, shift);
 
         datetime serverTime = TimeCurrent();
+        long synced = SeriesInfoInteger(symbol, tf, SERIES_SYNCHRONIZED);
+        long barsCount = Bars(symbol, tf);
         Log("[TimeDebug] Symbol=" + symbol + " TF=" + tfName + " Shift=" + (string)shift
             + " MT5Time=" + TimeToString(serverTime)
+            + " TimeLocal=" + TimeToString(TimeLocal())
+            + " TimeTradeServer=" + TimeToString(TimeTradeServer())
+            + " TimeGMT=" + TimeToString(TimeGMT())
             + " BarOpen=" + TimeToString(t)
             + " BarClose=" + TimeToString(t + (datetime)(PeriodSeconds(tf)))
             + " SecondsToClose=" + (string)((int)((t + (datetime)(PeriodSeconds(tf)) - serverTime)))
-            + " UTC=" + TimeToString(TimeGMT())
-            + " Nairobi=" + TimeToString(serverTime + (datetime)(3 * 3600)));
+            + " SeriesSynced=" + (string)synced
+            + " BarsCount=" + (string)barsCount);
 
         string payload = StringFormat(
             "{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"tick_volume\":%d,\"shift\":%d}",

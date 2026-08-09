@@ -5,7 +5,7 @@ import hmac
 import secrets
 from flask import Flask, render_template, request, jsonify, redirect, session, url_for
 from datetime import datetime, timedelta, timezone
-from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, DASHBOARD_SECRET_KEY
+from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MAX_TOTAL_OPEN_RISK, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, DASHBOARD_SECRET_KEY
 from logger import setup_logger
 from notifications import notify
 
@@ -406,6 +406,83 @@ def _get_risk_amount(data, symbol):
     return risk_amount
 
 
+def _get_total_open_risk():
+    try:
+        conn = _get_db()
+        rows = conn.execute(
+            "SELECT risk_amount FROM trades WHERE status='Executed'"
+        ).fetchall()
+        conn.close()
+        return sum(float(row["risk_amount"]) for row in rows)
+    except Exception:
+        return 0.0
+
+
+def _validate_candle_freshness(symbol, timeframe, candle_data):
+    """Validate that candle data is fresh and safe to trade on.
+    
+    Returns (is_fresh, reason_str).
+    """
+    from symbol_store import get_candle_age, get_series_synced
+    from datetime import datetime, timezone
+    
+    if not candle_data:
+        return False, "No candle data"
+    
+    time_val = candle_data.get("time")
+    if time_val is None:
+        return False, "Candle timestamp missing"
+    
+    candle_time = None
+    if isinstance(time_val, (int, float)):
+        try:
+            candle_time = datetime.fromtimestamp(float(time_val), tz=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+    else:
+        try:
+            candle_time = datetime.fromisoformat(str(time_val).replace("Z", "+00:00"))
+            if candle_time.tzinfo is None:
+                candle_time = candle_time.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+    
+    if candle_time is None:
+        return False, f"Invalid candle timestamp: {time_val}"
+    
+    now = datetime.now(timezone.utc)
+    age_seconds = (now - candle_time).total_seconds()
+    
+    tf_seconds = TF_SECONDS.get(timeframe.upper(), 900)
+    max_age = tf_seconds * 3
+    
+    if age_seconds > max_age:
+        return False, f"Stale candle: age={age_seconds:.0f}s, max={max_age}s, timestamp={time_val}"
+    
+    series_synced = get_series_synced(symbol)
+    if series_synced is not None and not series_synced:
+        return False, f"Series not synchronized: series_synced={series_synced}"
+    
+    return True, f"Fresh candle: age={age_seconds:.0f}s, timestamp={time_val}"
+
+
+def _log_candle_stage(stage, symbol, timeframe, candle_data, extra=None):
+    """Detailed logging for candle data at each pipeline stage."""
+    if not candle_data:
+        add_log("warn", f"[CandlePipeline][{stage}] {symbol} {timeframe}: NO DATA")
+        return
+    time_val = candle_data.get("time")
+    try:
+        from datetime import datetime, timezone
+        ts = datetime.fromtimestamp(float(time_val), tz=timezone.utc).isoformat() if time_val else "None"
+    except (ValueError, TypeError):
+        ts = f"Invalid({time_val})"
+    msg = (f"[CandlePipeline][{stage}] {symbol} {timeframe}: "
+           f"time={ts} open={candle_data.get('open')} high={candle_data.get('high')} "
+           f"low={candle_data.get('low')} close={candle_data.get('close')}")
+    if extra:
+        msg += f" | {extra}"
+    add_log("info", msg)
 
 
 def _preflight_checks(symbol, data=None):
@@ -470,12 +547,16 @@ def _preflight_checks(symbol, data=None):
     low = float(data.get("low", candle.get("low", 0) if candle else 0))
     close = float(data.get("close", candle.get("close", 0) if candle else 0))
     if candle_ok:
-        if direction == "BUY":
-            sl = low
-            entry = close
+        entry = close
+        manual_sl = data.get("manual_sl")
+        if manual_sl is not None and str(manual_sl).strip() != "":
+            sl = round(float(manual_sl), int(sym_info.get("digits", 5)) if sym_info else 5)
         else:
-            sl = high
-            entry = close
+            if direction == "BUY":
+                sl = low
+            else:
+                sl = high
+            sl = round(sl, int(sym_info.get("digits", 5)) if sym_info else 5)
     else:
         sl = 0
         entry = 0
@@ -703,7 +784,11 @@ def api_status():
     
     open_positions = sum(1 for position in ea_state["positions"].values()
                          if position.get("symbol") == current)
-    
+    total_open_risk = _get_total_open_risk()
+
+    pending_ids = list(pending_trades.keys())
+    add_log("info", f"[STATUS_STATE] pid={os.getpid()} pending_count={len(pending_ids)} pending_ids={pending_ids} requested_trade_id={trade_id or 'none'} armed_count={len([t for t in pending_trades.values() if t.get('status') == 'armed'])} open_positions={open_positions} total_open_risk={total_open_risk:.2f}")
+
     return jsonify({
         "connected": connected,
         "login": account.get("login") if account else None,
@@ -718,6 +803,9 @@ def api_status():
         "countdown_str": _format_countdown(countdown),
         "stages": stages,
         "open_positions": open_positions,
+        "total_open_risk": total_open_risk,
+        "max_open_positions": MAX_OPEN_POSITIONS,
+        "max_total_open_risk": MAX_TOTAL_OPEN_RISK,
     })
 
 
@@ -913,13 +1001,17 @@ def api_ea_pending():
     symbol = _current_symbol()
     ea_state["last_seen"] = datetime.now().isoformat()
     trade_id = request.args.get("trade_id")
+    
+    pending_ids = list(pending_trades.keys())
+    add_log("info", f"[EA_PENDING] pid={os.getpid()} symbol={symbol} requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} pending_ids={pending_ids}")
+    
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]
         candle_close_unix = _compute_candle_close_unix(trade)
         tf = trade.get("timeframe", TIMEFRAME)
         candle_time_str = trade.get("candle_time", "")
         close_req = ea_state.pop("close_request", None)
-        return jsonify({
+        response_data = {
             "trade_id": trade["trade_id"],
             "status": trade["status"],
             "direction": trade["direction"],
@@ -933,10 +1025,15 @@ def api_ea_pending():
             "lot": trade.get("lot", 0),
             "be_rr": trade.get("be_rr", 0),
             "be_trigger": trade.get("be_trigger", 0),
+            "manual_sl": trade.get("sl", 0),
+            "risk_amount": trade.get("risk_amount", 0),
+            "rr_ratio": trade.get("rr_ratio", 0),
             "close_ticket": close_req.get("ticket") if close_req else 0,
             "close_symbol": close_req.get("symbol", trade.get("symbol", "")) if close_req else "",
             "error": trade.get("error", ""),
-        })
+        }
+        add_log("info", f"[TradeLifecycle][EA_PENDING_RETURN] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} status={trade['status']} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)}")
+        return jsonify(response_data)
 
     armed = [(tid, t) for tid, t in pending_trades.items() if t.get("status") == "armed"]
     if armed:
@@ -947,7 +1044,7 @@ def api_ea_pending():
         candle_time_str = trade.get("candle_time", "")
         trade_symbol = trade.get("symbol", _current_symbol())
         close_req = ea_state.pop("close_request", None)
-        return jsonify({
+        response_data = {
             "trade_id": trade["trade_id"],
             "status": trade["status"],
             "direction": trade["direction"],
@@ -963,12 +1060,15 @@ def api_ea_pending():
             "lot": trade.get("lot", 0),
             "be_rr": trade.get("be_rr", 0),
             "be_trigger": trade.get("be_trigger", 0),
+            "manual_sl": trade.get("sl", 0),
             "risk_amount": trade.get("risk_amount", 0),
             "rr_ratio": trade.get("rr_ratio", 0),
             "close_ticket": close_req.get("ticket") if close_req else 0,
             "close_symbol": close_req.get("symbol", trade_symbol) if close_req else "",
             "error": trade.get("error", ""),
-        })
+        }
+        add_log("info", f"[CandlePipeline][EA_PENDING_ARMED] trade_id={latest_id} symbol={trade['symbol']} direction={trade['direction']} candle_time={candle_time_str} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)} manual_sl={trade.get('sl', 0)} risk={trade.get('risk_amount', 0)} rr={trade.get('rr_ratio', 0)}")
+        return jsonify(response_data)
 
     close_req = ea_state.pop("close_request", None)
     return jsonify({
@@ -1054,6 +1154,10 @@ def api_ea_report_candle():
     timeframe = data.get("timeframe", TIMEFRAME)
     if not symbol:
         return jsonify({"error": "Missing symbol"}), 400
+    
+    _log_candle_stage("EA_REPORT", symbol, timeframe, data, 
+                      f"shift={data.get('shift')} series_synced={data.get('series_synced')} bars={data.get('bars_count')}")
+    
     ea_state["candles"][symbol] = data
     ea_state["last_seen"] = datetime.now().isoformat()
     try:
@@ -1069,6 +1173,7 @@ def api_ea_report_candle():
             "real_volume": data.get("real_volume", 0),
         }
         set_candle(symbol, timeframe, candle)
+        _log_candle_stage("STORED", symbol, timeframe, candle)
     except Exception:
         pass
     return jsonify({"status": "ok"})
@@ -1078,8 +1183,22 @@ def api_ea_report_candle():
 def api_ea_report_execution():
     data = request.get_json(silent=True) or {}
     trade_id = data.get("trade_id")
+    status = data.get("status", "unknown")
+    retcode = data.get("retcode", 0)
+    comment = data.get("comment", "")
+    order = data.get("order", 0)
+    deal = data.get("deal", 0)
+    entry = data.get("entry", 0)
+    slippage = data.get("slippage", 0)
+    spread = data.get("spread", 0)
+    
+    add_log("info", f"[TradeLifecycle][EA_REPORT_EXECUTION] trade_id={trade_id} status={status} retcode={retcode} comment={comment} order={order} deal={deal} entry={entry} slippage={slippage} spread={spread}")
+    
     if trade_id in pending_trades:
         pending_trades[trade_id].update(data)
+        if status in ("executed", "error", "stale_bar", "cancelled"):
+            pending_trades[trade_id]["status"] = status
+            add_log("info", f"[TradeLifecycle][PENDING_STATUS_CHANGED] trade_id={trade_id} new_status={status}")
     ea_state["last_seen"] = datetime.now().isoformat()
     return jsonify({"status": "ok"})
 
@@ -1126,6 +1245,32 @@ def api_reconnect():
     })
 
 
+@app.route("/api/debug/state")
+def api_debug_state():
+    pending = []
+    for tid, trade in pending_trades.items():
+        pending.append({
+            "trade_id": tid,
+            "status": trade.get("status"),
+            "symbol": trade.get("symbol"),
+            "direction": trade.get("direction"),
+            "entry": trade.get("entry"),
+            "sl": trade.get("sl"),
+            "tp": trade.get("tp"),
+            "lot": trade.get("lot"),
+            "candle_time": trade.get("candle_time"),
+            "risk_amount": trade.get("risk_amount"),
+            "rr_ratio": trade.get("rr_ratio"),
+        })
+    return jsonify({
+        "pending_trades": pending,
+        "pending_count": len(pending_trades),
+        "ea_last_seen": ea_state.get("last_seen"),
+        "ea_connected": _ea_connected(),
+        "server_time": datetime.now().isoformat(),
+    })
+
+
 @app.route("/api/settings", methods=["POST"])
 def api_settings():
     global DEFAULT_RISK_AMOUNT, RR_RATIO, BE_RR
@@ -1166,6 +1311,29 @@ def api_candle_data():
                 "message": f"Symbol {current} not registered with broker. Select it in Market Watch or switch to a registered symbol.",
             })
         return jsonify({"error": "No candle data", "symbol": current})
+
+    _log_candle_stage("API_CANDLE_DATA", current, TIMEFRAME, {
+        "time": candle["time"].timestamp() if hasattr(candle["time"], "timestamp") else candle["time"],
+        "open": candle["open"],
+        "high": candle["high"],
+        "low": candle["low"],
+        "close": candle["close"],
+    })
+
+    is_fresh, reason = _validate_candle_freshness(current, TIMEFRAME, {
+        "time": candle["time"].timestamp() if hasattr(candle["time"], "timestamp") else candle["time"],
+        "open": candle["open"],
+        "high": candle["high"],
+        "low": candle["low"],
+        "close": candle["close"],
+    })
+    if not is_fresh:
+        add_log("warn", f"[CandlePipeline] BLOCKED stale candle in api_candle_data: {reason}")
+        return jsonify({
+            "error": "STALE_MARKET_DATA",
+            "symbol": current,
+            "message": f"Candle data is stale: {reason}. Wait for synchronized market data.",
+        })
 
     return jsonify({
         "symbol": current,
@@ -1372,6 +1540,77 @@ def api_monitor():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/preview_trade", methods=["POST"])
+def api_preview_trade():
+    try:
+        data = request.get_json(silent=True) or {}
+        symbol = data.get("symbol") or _current_symbol()
+        direction = data.get("direction", "BUY")
+        close = float(data.get("close", 0))
+        manual_sl = data.get("manual_sl")
+        
+        sym = ea_state.get("symbols", {}).get(symbol)
+        digits = int(sym.get("digits", 5)) if sym else 5
+        point = float(sym.get("point") or 0.00001) if sym else 0.00001
+        
+        entry = round(close, digits)
+        sl = round(float(manual_sl), digits) if manual_sl else 0
+        
+        _log_candle_stage("PREVIEW_TRADE", symbol, TIMEFRAME, {
+            "time": data.get("time"),
+            "open": 0,
+            "high": 0,
+            "low": 0,
+            "close": close,
+        }, f"entry={entry} sl={sl} risk={_get_risk_amount(data, symbol)}")
+        
+        is_fresh, fresh_reason = _validate_candle_freshness(symbol, TIMEFRAME, {
+            "time": data.get("time"),
+            "open": 0,
+            "high": 0,
+            "low": 0,
+            "close": close,
+        })
+        if not is_fresh:
+            add_log("warn", f"[CandlePipeline] BLOCKED stale candle in api_preview_trade: {fresh_reason}")
+            return jsonify({"error": f"STALE_MARKET_DATA: {fresh_reason}"}), 400
+        
+        if sl == 0 or entry == 0:
+            return jsonify({"error": "Invalid stop loss or entry price"}), 400
+        
+        if direction == "BUY" and sl >= entry:
+            return jsonify({"error": f"Invalid SL for BUY: SL must be below entry"}), 400
+        if direction == "SELL" and sl <= entry:
+            return jsonify({"error": f"Invalid SL for SELL: SL must be above entry"}), 400
+        
+        risk_amount = _get_risk_amount(data, symbol)
+        rr_ratio = float(data.get("rr_ratio", RR_RATIO))
+        
+        lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
+        volume_max = sym.get("volume_max") if sym else None
+        if volume_max is not None and lot > volume_max:
+            lot = volume_max
+        
+        diff = abs(entry - sl)
+        tp = entry + diff * rr_ratio if direction == "BUY" else entry - diff * rr_ratio
+        tp = round(tp, digits)
+        
+        dist_points = diff / point
+        dist_pips = dist_points / 10.0
+        
+        return jsonify({
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "lot": lot,
+            "risk_amount": risk_amount,
+            "distance_pips": round(dist_pips, 2),
+            "rr_ratio": rr_ratio,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/prepare_trade", methods=["POST"])
 def api_prepare_trade():
     try:
@@ -1404,18 +1643,28 @@ def api_prepare_trade():
                 "message": "Waiting for EA to report data. Retrying...",
             }), 409
 
-        if len(_get_open_positions_impl(symbol)) >= MAX_OPEN_POSITIONS:
+        if len(_get_open_positions_impl()) >= MAX_OPEN_POSITIONS:
             return jsonify({"error": "Max positions reached"}), 400
 
-        if direction == "BUY":
-            sl = low
-            entry = close
-        else:
-            sl = high
-            entry = close
+        total_open_risk = _get_total_open_risk()
+        new_trade_risk = _get_risk_amount(data, symbol)
+        if total_open_risk + new_trade_risk > MAX_TOTAL_OPEN_RISK:
+            return jsonify({"error": f"Max total open risk exceeded. Current: ${total_open_risk:.2f}, New: ${new_trade_risk:.2f}, Limit: ${MAX_TOTAL_OPEN_RISK:.2f}"}), 400
 
-        if sl == 0 or entry == 0:
-            return jsonify({"error": "Invalid candle data"}), 400
+        candle_data_for_validation = {
+            "time": data.get("time"),
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+        }
+        is_fresh, fresh_reason = _validate_candle_freshness(symbol, timeframe, candle_data_for_validation)
+        if not is_fresh:
+            add_log("warn", f"[CandlePipeline] BLOCKED stale candle in api_prepare_trade: {fresh_reason}")
+            notify(f"❌ <b>Trade Blocked</b>\n{symbol} {direction}\n\nStale market data: {fresh_reason}")
+            return jsonify({"error": f"STALE_MARKET_DATA: {fresh_reason}"}), 400
+
+        entry = close
 
         sym = ea_state.get("symbols", {}).get(symbol)
         digits = 5
@@ -1427,12 +1676,24 @@ def api_prepare_trade():
             volume_max = sym.get("volume_max")
 
         entry = round(entry, digits)
-        sl = round(sl, digits)
 
-        if direction == "BUY" and entry <= sl:
-            return jsonify({"error": "Candle close is at or below candle low. Cannot place BUY with SL at low."}), 400
-        if direction == "SELL" and entry >= sl:
-            return jsonify({"error": "Candle close is at or above candle high. Cannot place SELL with SL at high."}), 400
+        manual_sl = data.get("manual_sl")
+        if manual_sl is not None and str(manual_sl).strip() != "":
+            sl = round(float(manual_sl), digits)
+        else:
+            if direction == "BUY":
+                sl = low
+            else:
+                sl = high
+            sl = round(sl, digits)
+
+        if sl == 0 or entry == 0:
+            return jsonify({"error": "Invalid stop loss or entry price"}), 400
+
+        if direction == "BUY" and sl >= entry:
+            return jsonify({"error": f"Invalid SL for BUY: SL must be below entry. SL={sl}, Entry={entry}"}), 400
+        if direction == "SELL" and sl <= entry:
+            return jsonify({"error": f"Invalid SL for SELL: SL must be above entry. SL={sl}, Entry={entry}"}), 400
 
         if ENFORCE_MIN_STOP and MIN_STOP_BUFFER_PIPS > 0:
             min_sl_distance = MIN_STOP_BUFFER_PIPS * point * 10
@@ -1504,6 +1765,9 @@ def api_prepare_trade():
             "time_remaining": _time_to_close(candle_time_str, timeframe),
         }
 
+        pending_ids = list(pending_trades.keys())
+        add_log("info", f"[ARM_STATE] trade_id={trade_id} symbol={symbol} direction={direction} pending_count={len(pending_ids)} pending_ids={pending_ids} pid={os.getpid()}")
+        add_log("info", f"[TradeLifecycle][ARMED] trade_id={trade_id} symbol={symbol} direction={direction} entry={entry} manual_sl={sl} tp={tp} lot={lot} risk={risk_amount} created_at={datetime.now().isoformat()}")
         add_log("info", f"Prepared {direction} {symbol}: entry={entry}, SL={sl}, TP={tp}, lot={lot}")
         notify(f"🛡 <b>Trade Armed</b>\n{direction} {symbol}\nEntry: {entry}\nSL: {sl}\nTP: {tp}\nLot: {lot}\nRisk: {risk_amount}")
 
@@ -1724,7 +1988,7 @@ def _api_execute_trade_impl():
             "comment": error_msg,
         }), 200
 
-    positions = get_open_positions(symbol)
+    positions = get_open_positions()
     if positions is None:
         print(f"EXECUTE_TRADE 400: Could not fetch positions")
         notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: Could not fetch positions")
@@ -1889,7 +2153,7 @@ def api_trade():
         if not ensure_connected():
             return jsonify({"message": "Not connected to MT5"}), 400
 
-        if len(get_open_positions(symbol)) >= MAX_OPEN_POSITIONS:
+        if len(get_open_positions()) >= MAX_OPEN_POSITIONS:
             return jsonify({"message": "Position already open"}), 400
 
         if not sl_price or not tp_price:
