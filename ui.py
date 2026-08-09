@@ -5,7 +5,7 @@ import hmac
 import secrets
 from flask import Flask, render_template, request, jsonify, redirect, session, url_for
 from datetime import datetime, timedelta, timezone
-from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, DASHBOARD_SECRET_KEY
+from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MAX_TOTAL_OPEN_RISK, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, DASHBOARD_SECRET_KEY
 from logger import setup_logger
 from notifications import notify
 
@@ -406,6 +406,16 @@ def _get_risk_amount(data, symbol):
     return risk_amount
 
 
+def _get_total_open_risk():
+    try:
+        conn = _get_db()
+        rows = conn.execute(
+            "SELECT risk_amount FROM trades WHERE status='Executed'"
+        ).fetchall()
+        conn.close()
+        return sum(float(row["risk_amount"]) for row in rows)
+    except Exception:
+        return 0.0
 
 
 def _preflight_checks(symbol, data=None):
@@ -470,12 +480,16 @@ def _preflight_checks(symbol, data=None):
     low = float(data.get("low", candle.get("low", 0) if candle else 0))
     close = float(data.get("close", candle.get("close", 0) if candle else 0))
     if candle_ok:
-        if direction == "BUY":
-            sl = low
-            entry = close
+        entry = close
+        manual_sl = data.get("manual_sl")
+        if manual_sl is not None and str(manual_sl).strip() != "":
+            sl = round(float(manual_sl), int(sym_info.get("digits", 5)) if sym_info else 5)
         else:
-            sl = high
-            entry = close
+            if direction == "BUY":
+                sl = low
+            else:
+                sl = high
+            sl = round(sl, int(sym_info.get("digits", 5)) if sym_info else 5)
     else:
         sl = 0
         entry = 0
@@ -703,7 +717,8 @@ def api_status():
     
     open_positions = sum(1 for position in ea_state["positions"].values()
                          if position.get("symbol") == current)
-    
+    total_open_risk = _get_total_open_risk()
+
     return jsonify({
         "connected": connected,
         "login": account.get("login") if account else None,
@@ -718,6 +733,9 @@ def api_status():
         "countdown_str": _format_countdown(countdown),
         "stages": stages,
         "open_positions": open_positions,
+        "total_open_risk": total_open_risk,
+        "max_open_positions": MAX_OPEN_POSITIONS,
+        "max_total_open_risk": MAX_TOTAL_OPEN_RISK,
     })
 
 
@@ -933,6 +951,9 @@ def api_ea_pending():
             "lot": trade.get("lot", 0),
             "be_rr": trade.get("be_rr", 0),
             "be_trigger": trade.get("be_trigger", 0),
+            "manual_sl": trade.get("sl", 0),
+            "risk_amount": trade.get("risk_amount", 0),
+            "rr_ratio": trade.get("rr_ratio", 0),
             "close_ticket": close_req.get("ticket") if close_req else 0,
             "close_symbol": close_req.get("symbol", trade.get("symbol", "")) if close_req else "",
             "error": trade.get("error", ""),
@@ -963,6 +984,7 @@ def api_ea_pending():
             "lot": trade.get("lot", 0),
             "be_rr": trade.get("be_rr", 0),
             "be_trigger": trade.get("be_trigger", 0),
+            "manual_sl": trade.get("sl", 0),
             "risk_amount": trade.get("risk_amount", 0),
             "rr_ratio": trade.get("rr_ratio", 0),
             "close_ticket": close_req.get("ticket") if close_req else 0,
@@ -1372,6 +1394,58 @@ def api_monitor():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/preview_trade", methods=["POST"])
+def api_preview_trade():
+    try:
+        data = request.get_json(silent=True) or {}
+        symbol = data.get("symbol") or _current_symbol()
+        direction = data.get("direction", "BUY")
+        close = float(data.get("close", 0))
+        manual_sl = data.get("manual_sl")
+        
+        sym = ea_state.get("symbols", {}).get(symbol)
+        digits = int(sym.get("digits", 5)) if sym else 5
+        point = float(sym.get("point") or 0.00001) if sym else 0.00001
+        
+        entry = round(close, digits)
+        sl = round(float(manual_sl), digits) if manual_sl else 0
+        
+        if sl == 0 or entry == 0:
+            return jsonify({"error": "Invalid stop loss or entry price"}), 400
+        
+        if direction == "BUY" and sl >= entry:
+            return jsonify({"error": f"Invalid SL for BUY: SL must be below entry"}), 400
+        if direction == "SELL" and sl <= entry:
+            return jsonify({"error": f"Invalid SL for SELL: SL must be above entry"}), 400
+        
+        risk_amount = _get_risk_amount(data, symbol)
+        rr_ratio = float(data.get("rr_ratio", RR_RATIO))
+        
+        lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
+        volume_max = sym.get("volume_max") if sym else None
+        if volume_max is not None and lot > volume_max:
+            lot = volume_max
+        
+        diff = abs(entry - sl)
+        tp = entry + diff * rr_ratio if direction == "BUY" else entry - diff * rr_ratio
+        tp = round(tp, digits)
+        
+        dist_points = diff / point
+        dist_pips = dist_points / 10.0
+        
+        return jsonify({
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "lot": lot,
+            "risk_amount": risk_amount,
+            "distance_pips": round(dist_pips, 2),
+            "rr_ratio": rr_ratio,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/prepare_trade", methods=["POST"])
 def api_prepare_trade():
     try:
@@ -1404,18 +1478,15 @@ def api_prepare_trade():
                 "message": "Waiting for EA to report data. Retrying...",
             }), 409
 
-        if len(_get_open_positions_impl(symbol)) >= MAX_OPEN_POSITIONS:
+        if len(_get_open_positions_impl()) >= MAX_OPEN_POSITIONS:
             return jsonify({"error": "Max positions reached"}), 400
 
-        if direction == "BUY":
-            sl = low
-            entry = close
-        else:
-            sl = high
-            entry = close
+        total_open_risk = _get_total_open_risk()
+        new_trade_risk = _get_risk_amount(data, symbol)
+        if total_open_risk + new_trade_risk > MAX_TOTAL_OPEN_RISK:
+            return jsonify({"error": f"Max total open risk exceeded. Current: ${total_open_risk:.2f}, New: ${new_trade_risk:.2f}, Limit: ${MAX_TOTAL_OPEN_RISK:.2f}"}), 400
 
-        if sl == 0 or entry == 0:
-            return jsonify({"error": "Invalid candle data"}), 400
+        entry = close
 
         sym = ea_state.get("symbols", {}).get(symbol)
         digits = 5
@@ -1427,12 +1498,24 @@ def api_prepare_trade():
             volume_max = sym.get("volume_max")
 
         entry = round(entry, digits)
-        sl = round(sl, digits)
 
-        if direction == "BUY" and entry <= sl:
-            return jsonify({"error": "Candle close is at or below candle low. Cannot place BUY with SL at low."}), 400
-        if direction == "SELL" and entry >= sl:
-            return jsonify({"error": "Candle close is at or above candle high. Cannot place SELL with SL at high."}), 400
+        manual_sl = data.get("manual_sl")
+        if manual_sl is not None and str(manual_sl).strip() != "":
+            sl = round(float(manual_sl), digits)
+        else:
+            if direction == "BUY":
+                sl = low
+            else:
+                sl = high
+            sl = round(sl, digits)
+
+        if sl == 0 or entry == 0:
+            return jsonify({"error": "Invalid stop loss or entry price"}), 400
+
+        if direction == "BUY" and sl >= entry:
+            return jsonify({"error": f"Invalid SL for BUY: SL must be below entry. SL={sl}, Entry={entry}"}), 400
+        if direction == "SELL" and sl <= entry:
+            return jsonify({"error": f"Invalid SL for SELL: SL must be above entry. SL={sl}, Entry={entry}"}), 400
 
         if ENFORCE_MIN_STOP and MIN_STOP_BUFFER_PIPS > 0:
             min_sl_distance = MIN_STOP_BUFFER_PIPS * point * 10
@@ -1724,7 +1807,7 @@ def _api_execute_trade_impl():
             "comment": error_msg,
         }), 200
 
-    positions = get_open_positions(symbol)
+    positions = get_open_positions()
     if positions is None:
         print(f"EXECUTE_TRADE 400: Could not fetch positions")
         notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: Could not fetch positions")
@@ -1889,7 +1972,7 @@ def api_trade():
         if not ensure_connected():
             return jsonify({"message": "Not connected to MT5"}), 400
 
-        if len(get_open_positions(symbol)) >= MAX_OPEN_POSITIONS:
+        if len(get_open_positions()) >= MAX_OPEN_POSITIONS:
             return jsonify({"message": "Position already open"}), 400
 
         if not sl_price or not tp_price:
