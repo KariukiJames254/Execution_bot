@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import unittest
+from datetime import datetime, timezone
 
 
 class MultiplePositionsTests(unittest.TestCase):
@@ -10,6 +11,9 @@ class MultiplePositionsTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    def _fresh_time(self):
+        return datetime.now(timezone.utc).isoformat()
 
     def setUp(self):
         self.module = self._load_module()
@@ -32,11 +36,16 @@ class MultiplePositionsTests(unittest.TestCase):
             "volume_step": 0.01,
             "digits": 5,
             "point": 0.00001,
+            "series_synced": 1,
         }
         self.module.ea_state["account"] = {"login": 12345, "balance": 50000}
-        self.module.ea_state["last_seen"] = "2024-01-01T00:00:00"
+        self.module.ea_state["last_seen"] = datetime.now(timezone.utc).isoformat()
         self.module.ea_state["positions"] = {}
         self.module.mt5 = None
+
+        from symbol_store import set_symbol_info, set_candle
+        set_symbol_info("EURUSD", self.module.ea_state["symbols"]["EURUSD"])
+        set_candle("EURUSD", "M15", {"time": datetime.now(timezone.utc).timestamp(), "open": 1.095, "high": 1.100, "low": 1.090, "close": 1.095})
 
         self.client = self.module.app.test_client()
         with self.client.session_transaction() as session:
@@ -61,7 +70,7 @@ class MultiplePositionsTests(unittest.TestCase):
                     "low": 1.09000,
                     "close": 1.09500,
                     "open": 1.09800,
-                    "time": "2026-08-09T21:28:18.028670+00:00",
+                    "time": self._fresh_time(),
                     "manual_sl": 1.09200,
                     "risk_amount": 310,
                     "rr_ratio": 5,
@@ -89,7 +98,7 @@ class MultiplePositionsTests(unittest.TestCase):
                     "low": 1.09000,
                     "close": 1.09500,
                     "open": 1.09800,
-                    "time": "2026-08-09T21:28:18.028670+00:00",
+                    "time": self._fresh_time(),
                     "manual_sl": 1.09200,
                     "risk_amount": 310,
                     "rr_ratio": 5,
@@ -106,7 +115,7 @@ class MultiplePositionsTests(unittest.TestCase):
                 "low": 1.09000,
                 "close": 1.09500,
                 "open": 1.09800,
-                "time": "2026-08-09T21:28:18.028670+00:00",
+                "time": self._fresh_time(),
                 "manual_sl": 1.09200,
                 "risk_amount": 310,
                 "rr_ratio": 5,
@@ -137,7 +146,7 @@ class MultiplePositionsTests(unittest.TestCase):
                 "low": 1.09000,
                 "close": 1.09500,
                 "open": 1.09800,
-                "time": "2026-08-09T21:28:18.028670+00:00",
+                "time": self._fresh_time(),
                 "manual_sl": 1.09200,
                 "risk_amount": 310,
                 "rr_ratio": 5,
@@ -179,7 +188,7 @@ class MultiplePositionsTests(unittest.TestCase):
                     "low": low,
                     "close": close,
                     "open": close - 0.001,
-                    "time": "2026-08-09T21:28:18.028670+00:00",
+                    "time": self._fresh_time(),
                     "manual_sl": sl,
                     "risk_amount": 310,
                     "rr_ratio": 5,

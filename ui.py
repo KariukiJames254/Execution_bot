@@ -786,6 +786,9 @@ def api_status():
                          if position.get("symbol") == current)
     total_open_risk = _get_total_open_risk()
 
+    pending_ids = list(pending_trades.keys())
+    add_log("info", f"[STATUS_STATE] pid={os.getpid()} pending_count={len(pending_ids)} pending_ids={pending_ids} requested_trade_id={trade_id or 'none'} armed_count={len([t for t in pending_trades.values() if t.get('status') == 'armed'])} open_positions={open_positions} total_open_risk={total_open_risk:.2f}")
+
     return jsonify({
         "connected": connected,
         "login": account.get("login") if account else None,
@@ -1000,7 +1003,7 @@ def api_ea_pending():
     trade_id = request.args.get("trade_id")
     
     pending_ids = list(pending_trades.keys())
-    add_log("info", f"[TradeLifecycle][EA_PENDING_REQUEST] requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} pending_ids={pending_ids} symbol={symbol}")
+    add_log("info", f"[EA_PENDING] pid={os.getpid()} symbol={symbol} requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} pending_ids={pending_ids}")
     
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]
@@ -1762,6 +1765,8 @@ def api_prepare_trade():
             "time_remaining": _time_to_close(candle_time_str, timeframe),
         }
 
+        pending_ids = list(pending_trades.keys())
+        add_log("info", f"[ARM_STATE] trade_id={trade_id} symbol={symbol} direction={direction} pending_count={len(pending_ids)} pending_ids={pending_ids} pid={os.getpid()}")
         add_log("info", f"[TradeLifecycle][ARMED] trade_id={trade_id} symbol={symbol} direction={direction} entry={entry} manual_sl={sl} tp={tp} lot={lot} risk={risk_amount} created_at={datetime.now().isoformat()}")
         add_log("info", f"Prepared {direction} {symbol}: entry={entry}, SL={sl}, TP={tp}, lot={lot}")
         notify(f"🛡 <b>Trade Armed</b>\n{direction} {symbol}\nEntry: {entry}\nSL: {sl}\nTP: {tp}\nLot: {lot}\nRisk: {risk_amount}")

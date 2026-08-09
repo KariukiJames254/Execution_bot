@@ -718,6 +718,7 @@ function fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode, manualS
             setButtonsDisabled(false);
             return;
           }
+          console.log('[UI][ARM_SUCCESS] trade_id=' + prepData.trade_id + ' status=' + prepData.status + ' symbol=' + prepData.symbol + ' direction=' + prepData.direction + ' entry=' + prepData.entry + ' sl=' + prepData.sl + ' tp=' + prepData.tp + ' lot=' + prepData.lot);
           pendingDirection = direction;
           updateStatus(direction + ' trade armed. Waiting for candle close...');
           window.location.href = '?trade_id=' + prepData.trade_id + '&symbol=' + encodeURIComponent(symbol);
@@ -848,29 +849,31 @@ function refreshData() {
     headers: { 'X-Symbol': symbol }
   })
   .then(function(r) { return r.json(); })
-  .then(function(data) {
-    var statusEl = document.getElementById('conn_status');
-    if (statusEl) {
-      statusEl.innerHTML = '<span class="status-dot ' + (data.connected ? 'status-connected' : 'status-disconnected') + '"></span>' + (data.connected ? 'Connected' : 'Disconnected');
-      statusEl.className = 'value ' + (data.connected ? 'green' : 'red');
-    }
-    document.getElementById('balance').textContent = data.balance ? '$' + data.balance.toFixed(2) : '---';
-    document.getElementById('equity').textContent = data.equity ? '$' + data.equity.toFixed(2) : '---';
-    if (data.bid) {
-      cachedBid = data.bid;
-      cachedAsk = data.ask;
-      document.getElementById('bid').textContent = data.bid.toFixed(5);
-      document.getElementById('ask').textContent = data.ask.toFixed(5);
-      document.getElementById('spread').textContent = ((data.ask - data.bid) * 10000).toFixed(1) + ' pips';
-    }
+   .then(function(data) {
+     console.log('[UI][STATUS_RESPONSE]', data);
+     var statusEl = document.getElementById('conn_status');
+     if (statusEl) {
+       statusEl.innerHTML = '<span class="status-dot ' + (data.connected ? 'status-connected' : 'status-disconnected') + '"></span>' + (data.connected ? 'Connected' : 'Disconnected');
+       statusEl.className = 'value ' + (data.connected ? 'green' : 'red');
+     }
+     document.getElementById('balance').textContent = data.balance ? '$' + data.balance.toFixed(2) : '---';
+     document.getElementById('equity').textContent = data.equity ? '$' + data.equity.toFixed(2) : '---';
+     if (data.bid) {
+       cachedBid = data.bid;
+       cachedAsk = data.ask;
+       document.getElementById('bid').textContent = data.bid.toFixed(5);
+       document.getElementById('ask').textContent = data.ask.toFixed(5);
+       document.getElementById('spread').textContent = ((data.ask - data.bid) * 10000).toFixed(1) + ' pips';
+     }
 
-    var pending = data.pending_trade || {};
-    
-    if (pending.status === 'armed' || data.open_positions > 0) {
-      setButtonsDisabled(true);
-    } else {
-      setButtonsDisabled(false);
-    }
+     var pending = data.pending_trade || {};
+     console.log('[UI][PENDING_TRADE] status=' + pending.status + ' trade_id=' + (pending.trade_id || 'none') + ' symbol=' + (pending.symbol || 'none') + ' direction=' + (pending.direction || 'none'));
+
+     if (pending.status === 'armed' || data.open_positions > 0) {
+       setButtonsDisabled(true);
+     } else {
+       setButtonsDisabled(false);
+     }
 
     var openPositionsEl = document.getElementById('open_positions');
     if (openPositionsEl) {
