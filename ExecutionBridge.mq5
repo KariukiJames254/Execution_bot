@@ -74,6 +74,18 @@ ENUM_TIMEFRAMES _PeriodToTf(int tf_minutes)
    else return PERIOD_D1;
 }
 
+string TimeframeToString(ENUM_TIMEFRAMES tf)
+{
+   if(tf == PERIOD_M1) return "M1";
+   if(tf == PERIOD_M5) return "M5";
+   if(tf == PERIOD_M15) return "M15";
+   if(tf == PERIOD_M30) return "M30";
+   if(tf == PERIOD_H1) return "H1";
+   if(tf == PERIOD_H4) return "H4";
+   if(tf == PERIOD_D1) return "D1";
+   return "UNKNOWN";
+}
+
 bool EnsureSymbol(string symbol)
 {
     if(symbol == "") return false;
@@ -124,6 +136,56 @@ void _cleanupTrade()
     armedSymbol        = "";
     armedTfMinutes     = 15;
     Comment("");
+}
+
+void LogTimeDiagnostics(string symbol, ENUM_TIMEFRAMES tf)
+{
+    if(symbol == "" || tf == 0) return;
+
+    datetime now = TimeCurrent();
+    datetime timeLocal = TimeLocal();
+    datetime timeServer = TimeTradeServer();
+    datetime timeGMT = TimeGMT();
+
+    MqlTick tick;
+    datetime tickTime = 0;
+    double tickBid = 0;
+    double tickAsk = 0;
+    if(SymbolInfoTick(symbol, tick))
+    {
+        tickTime = (datetime)tick.time;
+        tickBid = tick.bid;
+        tickAsk = tick.ask;
+    }
+
+    datetime bar0 = iTime(symbol, tf, 0);
+    datetime bar1 = iTime(symbol, tf, 1);
+    long synced = 0;
+    long barsCount = 0;
+    if(bar0 > 0)
+    {
+        synced = SeriesInfoInteger(symbol, tf, SERIES_SYNCHRONIZED);
+        barsCount = Bars(symbol, tf);
+    }
+
+    long periodSeconds = PeriodSeconds(tf);
+    datetime barClose0 = (bar0 > 0) ? (bar0 + periodSeconds) : 0;
+    long secondsToClose = (barClose0 > 0) ? (long)(barClose0 - now) : 0;
+
+    Log("[TimeDiagnostic] Symbol=" + symbol + " TF=" + TimeframeToString(tf) +
+        " TimeCurrent=" + TimeToString(now) +
+        " TimeLocal=" + TimeToString(timeLocal) +
+        " TimeTradeServer=" + TimeToString(timeServer) +
+        " TimeGMT=" + TimeToString(timeGMT) +
+        " TickTime=" + (tickTime > 0 ? TimeToString(tickTime) : "N/A") +
+        " TickBid=" + DoubleToString(tickBid, 5) +
+        " TickAsk=" + DoubleToString(tickAsk, 5) +
+        " Bar0=" + (bar0 > 0 ? TimeToString(bar0) : "N/A") +
+        " Bar1=" + (bar1 > 0 ? TimeToString(bar1) : "N/A") +
+        " BarClose0=" + (barClose0 > 0 ? TimeToString(barClose0) : "N/A") +
+        " SecondsToClose=" + (string)secondsToClose +
+        " SeriesSynced=" + (string)synced +
+        " BarsCount=" + (string)barsCount);
 }
 
 int OnInit()
@@ -488,17 +550,25 @@ void OnTimer()
         long maxExpectedAge = (long)armedTfMinutes * 2 * 60;
         bool staleBar = (barAgeSeconds > maxExpectedAge);
         if(staleBar)
+        {
             Log("CHECK STALE BAR tradeId=" + trackedTradeId + " barAge=" + (string)barAgeSeconds + "s now=" + TimeToString(now) + " barOpen=" + TimeToString(currentBarTime));
+            LogTimeDiagnostics(armedSymbol, _PeriodToTf(armedTfMinutes));
+        }
 
         Log("CHECK tradeId=" + trackedTradeId + " barChanged=" + (string)barChanged
-            + " timeReached=" + (string)timeReached + " now=" + (string)now + " close=" + (string)candleCloseTime);
+            + " timeReached=" + (string)timeReached + " now=" + (string)now + " close=" + (string)candleCloseTime
+            + " staleBar=" + (string)staleBar);
 
-        if(barChanged || timeReached)
+        if(staleBar)
         {
-            if(staleBar)
-                Log("EXECUTE: candle closed (STALE BAR DETECTED - verify data feed) — executing OrderSend locally");
-            else
-                Log("EXECUTE: candle closed — executing OrderSend locally");
+            Log("STALE_BAR_BLOCKED tradeId=" + trackedTradeId + " — execution blocked, waiting for synchronized market data");
+            ReportExecutionDetailed(pendingTradeId, "stale_bar", 1, "Stale candle data detected, execution blocked", 0, 0, 0, 0, 0);
+            int remaining = (int)(candleCloseTime - now);
+            Comment("STALE BAR\nExecution Blocked\nCheck data feed\n" + armedSymbol + "\nBar age: " + (string)barAgeSeconds + "s");
+        }
+        else if(barChanged || timeReached)
+        {
+            Log("EXECUTE: candle closed — executing OrderSend locally");
             ExecuteTradeLocal();
         }
         else
