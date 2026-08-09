@@ -418,6 +418,73 @@ def _get_total_open_risk():
         return 0.0
 
 
+def _validate_candle_freshness(symbol, timeframe, candle_data):
+    """Validate that candle data is fresh and safe to trade on.
+    
+    Returns (is_fresh, reason_str).
+    """
+    from symbol_store import get_candle_age, get_series_synced
+    from datetime import datetime, timezone
+    
+    if not candle_data:
+        return False, "No candle data"
+    
+    time_val = candle_data.get("time")
+    if time_val is None:
+        return False, "Candle timestamp missing"
+    
+    candle_time = None
+    if isinstance(time_val, (int, float)):
+        try:
+            candle_time = datetime.fromtimestamp(float(time_val), tz=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+    else:
+        try:
+            candle_time = datetime.fromisoformat(str(time_val).replace("Z", "+00:00"))
+            if candle_time.tzinfo is None:
+                candle_time = candle_time.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+    
+    if candle_time is None:
+        return False, f"Invalid candle timestamp: {time_val}"
+    
+    now = datetime.now(timezone.utc)
+    age_seconds = (now - candle_time).total_seconds()
+    
+    tf_seconds = TF_SECONDS.get(timeframe.upper(), 900)
+    max_age = tf_seconds * 3
+    
+    if age_seconds > max_age:
+        return False, f"Stale candle: age={age_seconds:.0f}s, max={max_age}s, timestamp={time_val}"
+    
+    series_synced = get_series_synced(symbol)
+    if series_synced is not None and not series_synced:
+        return False, f"Series not synchronized: series_synced={series_synced}"
+    
+    return True, f"Fresh candle: age={age_seconds:.0f}s, timestamp={time_val}"
+
+
+def _log_candle_stage(stage, symbol, timeframe, candle_data, extra=None):
+    """Detailed logging for candle data at each pipeline stage."""
+    if not candle_data:
+        add_log("warn", f"[CandlePipeline][{stage}] {symbol} {timeframe}: NO DATA")
+        return
+    time_val = candle_data.get("time")
+    try:
+        from datetime import datetime, timezone
+        ts = datetime.fromtimestamp(float(time_val), tz=timezone.utc).isoformat() if time_val else "None"
+    except (ValueError, TypeError):
+        ts = f"Invalid({time_val})"
+    msg = (f"[CandlePipeline][{stage}] {symbol} {timeframe}: "
+           f"time={ts} open={candle_data.get('open')} high={candle_data.get('high')} "
+           f"low={candle_data.get('low')} close={candle_data.get('close')}")
+    if extra:
+        msg += f" | {extra}"
+    add_log("info", msg)
+
+
 def _preflight_checks(symbol, data=None):
     """Run pre-flight validation and return a list of check dicts.
 
@@ -937,7 +1004,7 @@ def api_ea_pending():
         tf = trade.get("timeframe", TIMEFRAME)
         candle_time_str = trade.get("candle_time", "")
         close_req = ea_state.pop("close_request", None)
-        return jsonify({
+        response_data = {
             "trade_id": trade["trade_id"],
             "status": trade["status"],
             "direction": trade["direction"],
@@ -957,7 +1024,9 @@ def api_ea_pending():
             "close_ticket": close_req.get("ticket") if close_req else 0,
             "close_symbol": close_req.get("symbol", trade.get("symbol", "")) if close_req else "",
             "error": trade.get("error", ""),
-        })
+        }
+        add_log("info", f"[CandlePipeline][EA_PENDING] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} candle_time={candle_time_str} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)} manual_sl={trade.get('sl', 0)} risk={trade.get('risk_amount', 0)} rr={trade.get('rr_ratio', 0)}")
+        return jsonify(response_data)
 
     armed = [(tid, t) for tid, t in pending_trades.items() if t.get("status") == "armed"]
     if armed:
@@ -968,7 +1037,7 @@ def api_ea_pending():
         candle_time_str = trade.get("candle_time", "")
         trade_symbol = trade.get("symbol", _current_symbol())
         close_req = ea_state.pop("close_request", None)
-        return jsonify({
+        response_data = {
             "trade_id": trade["trade_id"],
             "status": trade["status"],
             "direction": trade["direction"],
@@ -990,7 +1059,9 @@ def api_ea_pending():
             "close_ticket": close_req.get("ticket") if close_req else 0,
             "close_symbol": close_req.get("symbol", trade_symbol) if close_req else "",
             "error": trade.get("error", ""),
-        })
+        }
+        add_log("info", f"[CandlePipeline][EA_PENDING_ARMED] trade_id={latest_id} symbol={trade['symbol']} direction={trade['direction']} candle_time={candle_time_str} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)} manual_sl={trade.get('sl', 0)} risk={trade.get('risk_amount', 0)} rr={trade.get('rr_ratio', 0)}")
+        return jsonify(response_data)
 
     close_req = ea_state.pop("close_request", None)
     return jsonify({
@@ -1076,6 +1147,10 @@ def api_ea_report_candle():
     timeframe = data.get("timeframe", TIMEFRAME)
     if not symbol:
         return jsonify({"error": "Missing symbol"}), 400
+    
+    _log_candle_stage("EA_REPORT", symbol, timeframe, data, 
+                      f"shift={data.get('shift')} series_synced={data.get('series_synced')} bars={data.get('bars_count')}")
+    
     ea_state["candles"][symbol] = data
     ea_state["last_seen"] = datetime.now().isoformat()
     try:
@@ -1091,6 +1166,7 @@ def api_ea_report_candle():
             "real_volume": data.get("real_volume", 0),
         }
         set_candle(symbol, timeframe, candle)
+        _log_candle_stage("STORED", symbol, timeframe, candle)
     except Exception:
         pass
     return jsonify({"status": "ok"})
@@ -1188,6 +1264,29 @@ def api_candle_data():
                 "message": f"Symbol {current} not registered with broker. Select it in Market Watch or switch to a registered symbol.",
             })
         return jsonify({"error": "No candle data", "symbol": current})
+
+    _log_candle_stage("API_CANDLE_DATA", current, TIMEFRAME, {
+        "time": candle["time"].timestamp() if hasattr(candle["time"], "timestamp") else candle["time"],
+        "open": candle["open"],
+        "high": candle["high"],
+        "low": candle["low"],
+        "close": candle["close"],
+    })
+
+    is_fresh, reason = _validate_candle_freshness(current, TIMEFRAME, {
+        "time": candle["time"].timestamp() if hasattr(candle["time"], "timestamp") else candle["time"],
+        "open": candle["open"],
+        "high": candle["high"],
+        "low": candle["low"],
+        "close": candle["close"],
+    })
+    if not is_fresh:
+        add_log("warn", f"[CandlePipeline] BLOCKED stale candle in api_candle_data: {reason}")
+        return jsonify({
+            "error": "STALE_MARKET_DATA",
+            "symbol": current,
+            "message": f"Candle data is stale: {reason}. Wait for synchronized market data.",
+        })
 
     return jsonify({
         "symbol": current,
@@ -1410,6 +1509,25 @@ def api_preview_trade():
         entry = round(close, digits)
         sl = round(float(manual_sl), digits) if manual_sl else 0
         
+        _log_candle_stage("PREVIEW_TRADE", symbol, TIMEFRAME, {
+            "time": data.get("time"),
+            "open": 0,
+            "high": 0,
+            "low": 0,
+            "close": close,
+        }, f"entry={entry} sl={sl} risk={_get_risk_amount(data, symbol)}")
+        
+        is_fresh, fresh_reason = _validate_candle_freshness(symbol, TIMEFRAME, {
+            "time": data.get("time"),
+            "open": 0,
+            "high": 0,
+            "low": 0,
+            "close": close,
+        })
+        if not is_fresh:
+            add_log("warn", f"[CandlePipeline] BLOCKED stale candle in api_preview_trade: {fresh_reason}")
+            return jsonify({"error": f"STALE_MARKET_DATA: {fresh_reason}"}), 400
+        
         if sl == 0 or entry == 0:
             return jsonify({"error": "Invalid stop loss or entry price"}), 400
         
@@ -1485,6 +1603,19 @@ def api_prepare_trade():
         new_trade_risk = _get_risk_amount(data, symbol)
         if total_open_risk + new_trade_risk > MAX_TOTAL_OPEN_RISK:
             return jsonify({"error": f"Max total open risk exceeded. Current: ${total_open_risk:.2f}, New: ${new_trade_risk:.2f}, Limit: ${MAX_TOTAL_OPEN_RISK:.2f}"}), 400
+
+        candle_data_for_validation = {
+            "time": data.get("time"),
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+        }
+        is_fresh, fresh_reason = _validate_candle_freshness(symbol, timeframe, candle_data_for_validation)
+        if not is_fresh:
+            add_log("warn", f"[CandlePipeline] BLOCKED stale candle in api_prepare_trade: {fresh_reason}")
+            notify(f"❌ <b>Trade Blocked</b>\n{symbol} {direction}\n\nStale market data: {fresh_reason}")
+            return jsonify({"error": f"STALE_MARKET_DATA: {fresh_reason}"}), 400
 
         entry = close
 

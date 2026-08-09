@@ -1,9 +1,10 @@
 import importlib.util
 import pathlib
 import unittest
+from datetime import datetime, timezone, timedelta
 
 
-class ManualSlBehaviorTests(unittest.TestCase):
+class StaleCandleRejectionTests(unittest.TestCase):
     def _load_module(self):
         root = pathlib.Path(__file__).resolve().parents[1]
         spec = importlib.util.spec_from_file_location("ui_module", root / "ui.py")
@@ -20,7 +21,7 @@ class ManualSlBehaviorTests(unittest.TestCase):
             {"name": "EA Connected", "passed": True, "status": "passed", "message": "OK"},
             {"name": "Account Info Received", "passed": True, "status": "passed", "message": "OK"},
             {"name": "Symbol Info", "passed": True, "status": "passed", "message": "OK"},
-            {"name": "Candle Data", "passed": True, "status": "passed", "message": "OK"},
+            {"name": "Candle Data Available", "passed": True, "status": "passed", "message": "OK"},
             {"name": "Stop Loss Valid", "passed": True, "status": "passed", "message": "OK"},
             {"name": "Lot Size Valid", "passed": True, "status": "passed", "message": "OK"},
             {"name": "Take Profit Valid", "passed": True, "status": "passed", "message": "OK"},
@@ -32,10 +33,15 @@ class ManualSlBehaviorTests(unittest.TestCase):
             "volume_step": 0.01,
             "digits": 5,
             "point": 0.00001,
+            "series_synced": 1,
         }
         self.module.ea_state["account"] = {"login": 12345, "balance": 50000}
         self.module.ea_state["last_seen"] = "2024-01-01T00:00:00"
         self.module.mt5 = None
+
+        from symbol_store import set_symbol_info, set_candle
+        set_symbol_info("EURUSD", self.module.ea_state["symbols"]["EURUSD"])
+        set_candle("EURUSD", "M15", {"time": datetime.now(timezone.utc).timestamp(), "open": 1.095, "high": 1.100, "low": 1.090, "close": 1.095})
 
         self.client = self.module.app.test_client()
         with self.client.session_transaction() as session:
@@ -48,7 +54,8 @@ class ManualSlBehaviorTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_buy_manual_sl_overrides_candle_low(self):
+    def test_stale_candle_blocks_arm_trade(self):
+        stale_timestamp = (datetime.now(timezone.utc) - timedelta(hours=48)).timestamp()
         response = self.client.post(
             "/api/prepare_trade",
             json={
@@ -58,82 +65,18 @@ class ManualSlBehaviorTests(unittest.TestCase):
                 "low": 1.09000,
                 "close": 1.09500,
                 "open": 1.09800,
-                "time": "2026-08-09T21:28:18.028670+00:00",
-                "manual_sl": 1.08800,
-                "risk_amount": 310,
-                "rr_ratio": 5,
-            },
-        )
-        self.assertEqual(response.status_code, 200)
-        payload = response.get_json()
-        self.assertEqual(payload["sl"], 1.08800)
-        self.assertNotEqual(payload["sl"], 1.09000)
-
-    def test_sell_manual_sl_overrides_candle_high(self):
-        response = self.client.post(
-            "/api/prepare_trade",
-            json={
-                "symbol": "EURUSD",
-                "direction": "SELL",
-                "high": 1.10000,
-                "low": 1.09000,
-                "close": 1.09500,
-                "open": 1.09800,
-                "time": "2026-08-09T21:28:18.028670+00:00",
-                "manual_sl": 1.10200,
-                "risk_amount": 310,
-                "rr_ratio": 5,
-            },
-        )
-        self.assertEqual(response.status_code, 200)
-        payload = response.get_json()
-        self.assertEqual(payload["sl"], 1.10200)
-        self.assertNotEqual(payload["sl"], 1.10000)
-
-    def test_manual_sl_change_recalculates_lot_and_tp(self):
-        self.module.calculate_lot_from_risk = lambda entry, sl, risk, symbol=None: 0.5 if abs(entry - sl) > 0.005 else 0.2
-
-        response1 = self.client.post(
-            "/api/prepare_trade",
-            json={
-                "symbol": "EURUSD",
-                "direction": "BUY",
-                "high": 1.10000,
-                "low": 1.09000,
-                "close": 1.09500,
-                "open": 1.09800,
-                "time": "2026-08-09T21:28:18.028670+00:00",
-                "manual_sl": 1.08800,
-                "risk_amount": 310,
-                "rr_ratio": 5,
-            },
-        )
-        self.assertEqual(response1.status_code, 200)
-        payload1 = response1.get_json()
-        self.assertEqual(payload1["lot"], 0.5)
-        self.assertEqual(payload1["tp"], 1.13000)
-
-        response2 = self.client.post(
-            "/api/prepare_trade",
-            json={
-                "symbol": "EURUSD",
-                "direction": "BUY",
-                "high": 1.10000,
-                "low": 1.09000,
-                "close": 1.09500,
-                "open": 1.09800,
-                "time": "2026-08-09T21:28:18.028670+00:00",
+                "time": stale_timestamp,
                 "manual_sl": 1.09200,
                 "risk_amount": 310,
                 "rr_ratio": 5,
             },
         )
-        self.assertEqual(response2.status_code, 200)
-        payload2 = response2.get_json()
-        self.assertEqual(payload2["lot"], 0.2)
-        self.assertEqual(payload2["tp"], 1.11000)
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertIn("STALE_MARKET_DATA", payload["error"])
 
-    def test_ea_pending_sends_manual_sl_and_risk_fields(self):
+    def test_fresh_candle_allows_arm_trade(self):
+        fresh_timestamp = datetime.now(timezone.utc).timestamp()
         response = self.client.post(
             "/api/prepare_trade",
             json={
@@ -143,21 +86,75 @@ class ManualSlBehaviorTests(unittest.TestCase):
                 "low": 1.09000,
                 "close": 1.09500,
                 "open": 1.09800,
-                "time": "2026-08-09T21:28:18.028670+00:00",
-                "manual_sl": 1.08800,
+                "time": fresh_timestamp,
+                "manual_sl": 1.09200,
                 "risk_amount": 310,
                 "rr_ratio": 5,
             },
         )
         self.assertEqual(response.status_code, 200)
-        trade_id = response.get_json()["trade_id"]
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "armed")
 
-        pending_response = self.client.get(f"/api/ea/pending?trade_id={trade_id}")
-        self.assertEqual(pending_response.status_code, 200)
-        payload = pending_response.get_json()
-        self.assertEqual(payload["manual_sl"], 1.08800)
-        self.assertEqual(payload["risk_amount"], 310.0)
-        self.assertEqual(payload["rr_ratio"], 5.0)
+    def test_series_not_synced_blocks_arm_trade(self):
+        from symbol_store import set_symbol_info
+        self.module.ea_state["symbols"]["EURUSD"]["series_synced"] = 0
+        set_symbol_info("EURUSD", self.module.ea_state["symbols"]["EURUSD"])
+        fresh_timestamp = datetime.now(timezone.utc).timestamp()
+        response = self.client.post(
+            "/api/prepare_trade",
+            json={
+                "symbol": "EURUSD",
+                "direction": "BUY",
+                "high": 1.10000,
+                "low": 1.09000,
+                "close": 1.09500,
+                "open": 1.09800,
+                "time": fresh_timestamp,
+                "manual_sl": 1.09200,
+                "risk_amount": 310,
+                "rr_ratio": 5,
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertIn("STALE_MARKET_DATA", payload["error"])
+
+    def test_stale_candle_blocks_preview_trade(self):
+        stale_timestamp = (datetime.now(timezone.utc) - timedelta(hours=48)).timestamp()
+        response = self.client.post(
+            "/api/preview_trade",
+            json={
+                "symbol": "EURUSD",
+                "direction": "BUY",
+                "close": 1.09500,
+                "manual_sl": 1.09200,
+                "time": stale_timestamp,
+                "risk_amount": 310,
+                "rr_ratio": 5,
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertIn("STALE_MARKET_DATA", payload["error"])
+
+    def test_fresh_candle_allows_preview_trade(self):
+        fresh_timestamp = datetime.now(timezone.utc).timestamp()
+        response = self.client.post(
+            "/api/preview_trade",
+            json={
+                "symbol": "EURUSD",
+                "direction": "BUY",
+                "close": 1.09500,
+                "manual_sl": 1.09200,
+                "time": fresh_timestamp,
+                "risk_amount": 310,
+                "rr_ratio": 5,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["sl"], 1.09200)
 
 
 if __name__ == "__main__":

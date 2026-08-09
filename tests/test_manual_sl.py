@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import unittest
+from datetime import datetime, timezone
 
 
 class ManualSlTests(unittest.TestCase):
@@ -11,16 +12,19 @@ class ManualSlTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    def _fresh_time(self):
+        return datetime.now(timezone.utc).isoformat()
+
     def setUp(self):
         self.module = self._load_module()
         self.module.ensure_connected = lambda: True
-        self.module.get_open_positions = lambda symbol=None: []
+        self.module._execution_get_open_positions = lambda symbol=None: []
         self.module.calculate_lot_from_risk = lambda *args, **kwargs: 0.1
         self.module._preflight_checks = lambda symbol, data=None: [
             {"name": "EA Connected", "passed": True, "status": "passed", "message": "OK"},
             {"name": "Account Info Received", "passed": True, "status": "passed", "message": "OK"},
             {"name": "Symbol Info", "passed": True, "status": "passed", "message": "OK"},
-            {"name": "Candle Data", "passed": True, "status": "passed", "message": "OK"},
+            {"name": "Candle Data Available", "passed": True, "status": "passed", "message": "OK"},
             {"name": "Stop Loss Valid", "passed": True, "status": "passed", "message": "OK"},
             {"name": "Lot Size Valid", "passed": True, "status": "passed", "message": "OK"},
             {"name": "Take Profit Valid", "passed": True, "status": "passed", "message": "OK"},
@@ -32,10 +36,15 @@ class ManualSlTests(unittest.TestCase):
             "volume_step": 0.01,
             "digits": 5,
             "point": 0.00001,
+            "series_synced": 1,
         }
         self.module.ea_state["account"] = {"login": 12345, "balance": 50000}
-        self.module.ea_state["last_seen"] = "2024-01-01T00:00:00"
+        self.module.ea_state["last_seen"] = datetime.now(timezone.utc).isoformat()
         self.module.mt5 = None
+
+        from symbol_store import set_symbol_info, set_candle
+        set_symbol_info("EURUSD", self.module.ea_state["symbols"]["EURUSD"])
+        set_candle("EURUSD", "M15", {"time": datetime.now(timezone.utc).timestamp(), "open": 1.095, "high": 1.100, "low": 1.090, "close": 1.095})
 
         self.client = self.module.app.test_client()
         with self.client.session_transaction() as session:
@@ -58,7 +67,7 @@ class ManualSlTests(unittest.TestCase):
                 "low": 1.09000,
                 "close": 1.09500,
                 "open": 1.09800,
-                "time": "2024-01-01T00:00:00",
+                "time": self._fresh_time(),
                 "manual_sl": 1.09200,
                 "risk_amount": 310,
                 "rr_ratio": 5,
@@ -81,7 +90,7 @@ class ManualSlTests(unittest.TestCase):
                 "low": 1.09000,
                 "close": 1.09500,
                 "open": 1.09800,
-                "time": "2024-01-01T00:00:00",
+                "time": self._fresh_time(),
                 "manual_sl": 1.09600,
                 "risk_amount": 310,
                 "rr_ratio": 5,
@@ -102,7 +111,7 @@ class ManualSlTests(unittest.TestCase):
                 "low": 1.09000,
                 "close": 1.09500,
                 "open": 1.09800,
-                "time": "2024-01-01T00:00:00",
+                "time": self._fresh_time(),
                 "manual_sl": 1.09300,
                 "risk_amount": 310,
                 "rr_ratio": 5,
@@ -131,6 +140,7 @@ class ManualSlTests(unittest.TestCase):
                 "direction": "BUY",
                 "close": 1.09500,
                 "manual_sl": 1.09200,
+                "time": self._fresh_time(),
                 "risk_amount": 310,
                 "rr_ratio": 5,
             },
@@ -154,7 +164,7 @@ class ManualSlTests(unittest.TestCase):
                 "low": 1.09000,
                 "close": 1.09500,
                 "open": 1.09800,
-                "time": "2024-01-01T00:00:00",
+                "time": "2026-08-09T21:28:18.028670+00:00",
                 "manual_sl": 1.09200,
                 "risk_amount": 310,
                 "rr_ratio": 5,

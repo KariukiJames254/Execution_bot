@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import unittest
+from datetime import datetime, timezone
 
 
 class UiConnectionTests(unittest.TestCase):
@@ -91,7 +92,7 @@ class UiConnectionTests(unittest.TestCase):
                 "low": 1.0900,
                 "close": 1.0950,
                 "open": 1.0980,
-                "time": "2024-01-01T00:00:00",
+                "time": datetime.now(timezone.utc).isoformat(),
             },
         )
 
@@ -117,7 +118,7 @@ class UiConnectionTests(unittest.TestCase):
                 "low": 1.0900,
                 "close": 1.0950,
                 "open": 1.0980,
-                "time": "2024-01-01T00:00:00",
+                "time": datetime.now(timezone.utc).isoformat(),
             },
         )
 
@@ -170,7 +171,7 @@ class UiConnectionTests(unittest.TestCase):
                 "low": 1.0900,
                 "close": 1.0950,
                 "open": 1.0980,
-                "time": "2024-01-01T00:00:00",
+                "time": datetime.now(timezone.utc).isoformat(),
             },
         )
 

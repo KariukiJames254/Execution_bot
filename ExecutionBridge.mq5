@@ -446,6 +446,14 @@ void OnTimer()
         breakEvenApplied = false;
         pendingSymbol = (targetSymbol != "" ? targetSymbol : tradeSymbol);
 
+        Log("[CandlePipeline][EA_RECEIVED] tradeId=" + tradeId + " symbol=" + pendingSymbol + " direction=" + direction +
+            " candle_time=" + candleTimeStr + " timeframe=" + timeframe +
+            " entry=" + DoubleToString(pendingEntry, (int)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS)) +
+            " sl=" + DoubleToString(pendingSl, (int)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS)) +
+            " manual_sl=" + DoubleToString(pendingManualSl, (int)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS)) +
+            " tp=" + DoubleToString(pendingTp, (int)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS)) +
+            " risk=" + DoubleToString(pendingRiskAmount, 2) + " rr=" + DoubleToString(pendingRrRatio, 2));
+
         trackedTradeId   = tradeId;
         pendingTradeId   = tradeId;
         pendingDirection = direction;

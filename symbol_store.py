@@ -149,3 +149,63 @@ def get_candle(symbol=None, timeframe=None):
         timeframe = TIMEFRAME
     with _lock:
         return _candles.get(key, {}).get(timeframe)
+
+
+def get_candle_age(symbol=None, timeframe=None):
+    """Return age of latest candle in seconds, or -1 if unknown."""
+    candle = get_candle(symbol, timeframe)
+    if not candle:
+        return -1
+    time_val = candle.get("time")
+    if time_val is None:
+        return -1
+    try:
+        from datetime import datetime, timezone
+        if isinstance(time_val, (int, float)):
+            candle_time = datetime.fromtimestamp(float(time_val), tz=timezone.utc)
+        else:
+            try:
+                candle_time = datetime.fromisoformat(str(time_val).replace("Z", "+00:00"))
+                if candle_time.tzinfo is None:
+                    candle_time = candle_time.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                return -1
+        now = datetime.now(timezone.utc)
+        return (now - candle_time).total_seconds()
+    except (ValueError, TypeError):
+        return -1
+
+
+def is_candle_fresh(symbol=None, timeframe=None, max_age_seconds=None):
+    """Return True if the latest candle is fresh enough to trade on."""
+    age = get_candle_age(symbol, timeframe)
+    if age < 0:
+        return False
+    if max_age_seconds is None:
+        from config import TIMEFRAME
+        tf = timeframe or TIMEFRAME
+        try:
+            from ui import TF_SECONDS
+            tf_seconds = TF_SECONDS.get(tf.upper(), 900)
+        except Exception:
+            tf_seconds = 900
+        max_age_seconds = tf_seconds * 3
+    return age <= max_age_seconds
+
+
+def get_series_synced(symbol=None):
+    """Return SERIES_SYNCHRONIZED status from stored symbol info, or None."""
+    key = _key(symbol)
+    if not key:
+        return None
+    with _lock:
+        data = _symbols.get(key)
+    if not data:
+        return None
+    val = data.get("series_synced")
+    if val is None:
+        return None
+    try:
+        return bool(int(val))
+    except (ValueError, TypeError):
+        return None
