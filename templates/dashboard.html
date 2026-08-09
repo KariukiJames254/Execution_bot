@@ -658,7 +658,7 @@ function fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode) {
           }
           pendingDirection = direction;
           updateStatus(direction + ' trade armed. Waiting for candle close...');
-          window.location.href = '?trade_id=' + prepData.trade_id + '&symbol=' + encodeURIComponent(symbol);
+          window.location.href = '?trade_id=' + encodeURIComponent(prepData.trade_id) + '&symbol=' + encodeURIComponent(symbol);
         });
     })
     .catch(function(err) {

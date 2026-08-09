@@ -13,7 +13,7 @@ TIMEFRAME = os.environ.get("TIMEFRAME", "M15")
 
 RISK_PER_TRADE = float(os.environ.get("RISK_PER_TRADE", "1.0"))
 MAX_DAILY_LOSS = float(os.environ.get("MAX_DAILY_LOSS", "5.0"))
-MAX_OPEN_POSITIONS = int(os.environ.get("MAX_OPEN_POSITIONS", "2"))
+MAX_OPEN_POSITIONS = int(os.environ.get("MAX_OPEN_POSITIONS", "5"))
 
 SL_PIPS = int(os.environ.get("SL_PIPS", "50"))
 TP_PIPS = int(os.environ.get("TP_PIPS", "100"))
