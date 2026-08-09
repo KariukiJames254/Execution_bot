@@ -998,6 +998,10 @@ def api_ea_pending():
     symbol = _current_symbol()
     ea_state["last_seen"] = datetime.now().isoformat()
     trade_id = request.args.get("trade_id")
+    
+    pending_ids = list(pending_trades.keys())
+    add_log("info", f"[TradeLifecycle][EA_PENDING_REQUEST] requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} pending_ids={pending_ids} symbol={symbol}")
+    
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]
         candle_close_unix = _compute_candle_close_unix(trade)
@@ -1025,7 +1029,7 @@ def api_ea_pending():
             "close_symbol": close_req.get("symbol", trade.get("symbol", "")) if close_req else "",
             "error": trade.get("error", ""),
         }
-        add_log("info", f"[CandlePipeline][EA_PENDING] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} candle_time={candle_time_str} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)} manual_sl={trade.get('sl', 0)} risk={trade.get('risk_amount', 0)} rr={trade.get('rr_ratio', 0)}")
+        add_log("info", f"[TradeLifecycle][EA_PENDING_RETURN] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} status={trade['status']} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)}")
         return jsonify(response_data)
 
     armed = [(tid, t) for tid, t in pending_trades.items() if t.get("status") == "armed"]
@@ -1176,8 +1180,22 @@ def api_ea_report_candle():
 def api_ea_report_execution():
     data = request.get_json(silent=True) or {}
     trade_id = data.get("trade_id")
+    status = data.get("status", "unknown")
+    retcode = data.get("retcode", 0)
+    comment = data.get("comment", "")
+    order = data.get("order", 0)
+    deal = data.get("deal", 0)
+    entry = data.get("entry", 0)
+    slippage = data.get("slippage", 0)
+    spread = data.get("spread", 0)
+    
+    add_log("info", f"[TradeLifecycle][EA_REPORT_EXECUTION] trade_id={trade_id} status={status} retcode={retcode} comment={comment} order={order} deal={deal} entry={entry} slippage={slippage} spread={spread}")
+    
     if trade_id in pending_trades:
         pending_trades[trade_id].update(data)
+        if status in ("executed", "error", "stale_bar", "cancelled"):
+            pending_trades[trade_id]["status"] = status
+            add_log("info", f"[TradeLifecycle][PENDING_STATUS_CHANGED] trade_id={trade_id} new_status={status}")
     ea_state["last_seen"] = datetime.now().isoformat()
     return jsonify({"status": "ok"})
 
@@ -1221,6 +1239,32 @@ def api_reconnect():
         "connected": connected,
         "balance": account["balance"] if account else None,
         "equity": account["equity"] if account else None,
+    })
+
+
+@app.route("/api/debug/state")
+def api_debug_state():
+    pending = []
+    for tid, trade in pending_trades.items():
+        pending.append({
+            "trade_id": tid,
+            "status": trade.get("status"),
+            "symbol": trade.get("symbol"),
+            "direction": trade.get("direction"),
+            "entry": trade.get("entry"),
+            "sl": trade.get("sl"),
+            "tp": trade.get("tp"),
+            "lot": trade.get("lot"),
+            "candle_time": trade.get("candle_time"),
+            "risk_amount": trade.get("risk_amount"),
+            "rr_ratio": trade.get("rr_ratio"),
+        })
+    return jsonify({
+        "pending_trades": pending,
+        "pending_count": len(pending_trades),
+        "ea_last_seen": ea_state.get("last_seen"),
+        "ea_connected": _ea_connected(),
+        "server_time": datetime.now().isoformat(),
     })
 
 
@@ -1718,6 +1762,7 @@ def api_prepare_trade():
             "time_remaining": _time_to_close(candle_time_str, timeframe),
         }
 
+        add_log("info", f"[TradeLifecycle][ARMED] trade_id={trade_id} symbol={symbol} direction={direction} entry={entry} manual_sl={sl} tp={tp} lot={lot} risk={risk_amount} created_at={datetime.now().isoformat()}")
         add_log("info", f"Prepared {direction} {symbol}: entry={entry}, SL={sl}, TP={tp}, lot={lot}")
         notify(f"🛡 <b>Trade Armed</b>\n{direction} {symbol}\nEntry: {entry}\nSL: {sl}\nTP: {tp}\nLot: {lot}\nRisk: {risk_amount}")
 

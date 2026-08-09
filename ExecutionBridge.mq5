@@ -397,6 +397,7 @@ void OnTimer()
 
     if(tradeId == "" || status == "")
     {
+        Log("[TradeLifecycle][EA_PENDING_EMPTY] tradeId=empty status=empty symbol=" + eaSymbol + " trackedTradeId=" + trackedTradeId);
         // Even if no trade armed, check for close requests
         string closeTicketStr = Trim(ExtractJsonValue(response, "close_ticket"));
         long closeTicket = 0;
@@ -564,8 +565,11 @@ void OnTimer()
         }
 
         Log("CHECK tradeId=" + trackedTradeId + " barChanged=" + (string)barChanged
-            + " timeReached=" + (string)timeReached + " now=" + (string)now + " close=" + (string)candleCloseTime
-            + " staleBar=" + (string)staleBar);
+            + " timeReached=" + (string)timeReached + " now=" + TimeToString(now) + " close=" + TimeToString((datetime)candleCloseTime)
+            + " staleBar=" + (string)staleBar + " currentBar=" + TimeToString(currentBarTime)
+            + " previousBar=" + TimeToString(iTime(armedSymbol, _PeriodToTf(armedTfMinutes), 1))
+            + " serverTime=" + TimeToString(TimeTradeServer()) + " localTime=" + TimeToString(TimeLocal())
+            + " gmtTime=" + TimeToString(TimeGMT()));
 
         if(staleBar)
         {
@@ -789,6 +793,11 @@ void ExecuteTradeLocal()
         + " SL=" + DoubleToString(reqSl, (int)digits) + " TP=" + DoubleToString(reqTp, (int)digits)
         + " dev=" + (string)Deviation + " magic=" + (string)MagicNumber + " fill=" + (string)fillMode);
 
+    Log("[TradeLifecycle][EXECUTION_ATTEMPT] tradeId=" + pendingTradeId + " symbol=" + execSymbol + " direction=" + pendingDirection +
+        " entry=" + DoubleToString(execEntry, (int)digits) + " sl=" + DoubleToString(reqSl, (int)digits) +
+        " tp=" + DoubleToString(reqTp, (int)digits) + " lot=" + DoubleToString(lot, 2) +
+        " manual_sl=" + DoubleToString(pendingManualSl, (int)digits) + " risk=" + DoubleToString(pendingRiskAmount, 2));
+
     long tradeMode = SymbolInfoInteger(execSymbol, SYMBOL_TRADE_MODE);
     long terminalTradeAllowed = TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
     Log("ExecuteTradeLocal: tradeMode=" + (string)tradeMode + " terminalTradeAllowed=" + (string)terminalTradeAllowed
@@ -864,6 +873,7 @@ void ExecuteTradeLocal()
 
     if(!orderSuccess)
     {
+        Log("[TradeLifecycle][EXECUTION_FAILED] tradeId=" + pendingTradeId + " retcode=" + (string)lastRetcode + " comment=" + lastComment + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
         Log("OrderSend failed after " + (string)maxAttempts + " attempts. Last err=" + (string)lastErr
             + " retcode=" + (string)lastRetcode + " comment=" + lastComment);
         ReportExecutionDetailed(pendingTradeId, "error", 4756, "OrderSend failed after retries", 0, 0, execEntry, slippage, spread);
@@ -872,6 +882,11 @@ void ExecuteTradeLocal()
         return;
     }
 
+    Log("[TradeLifecycle][EXECUTION_SUCCESS] tradeId=" + pendingTradeId + " ticket=" + (string)lastOrder + " deal=" + (string)lastDeal +
+        " entry=" + DoubleToString(execEntry, (int)digits) + " sl=" + DoubleToString(reqSl, (int)digits) +
+        " tp=" + DoubleToString(reqTp, (int)digits) + " volume=" + DoubleToString(lot, 2) +
+        " retcode=" + (string)lastRetcode);
+    
     Log("OrderSend SUCCESS retcode=" + (string)lastRetcode + " comment=" + lastComment
         + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
 
