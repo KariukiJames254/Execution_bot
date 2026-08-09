@@ -5,7 +5,7 @@ import hmac
 import secrets
 from flask import Flask, render_template, request, jsonify, redirect, session, url_for
 from datetime import datetime, timedelta, timezone
-from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MAX_TOTAL_OPEN_RISK, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, DASHBOARD_SECRET_KEY
+from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RISK_PER_TRADE, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MAX_TOTAL_OPEN_RISK, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, DASHBOARD_SECRET_KEY
 from logger import setup_logger
 from notifications import notify
 
@@ -117,6 +117,31 @@ ea_state = {
     "requested_symbol": None,
     "close_request": None,
 }
+
+
+def _sync_pending_trades_from_disk():
+    """Merge disk pending trades into in-memory state without losing in-memory trades."""
+    try:
+        from pending_store import get_all_pending_trades
+        global pending_trades
+        disk_trades = get_all_pending_trades()
+        merged = dict(disk_trades)
+        for tid, trade in pending_trades.items():
+            if tid not in merged:
+                merged[tid] = trade
+        pending_trades = merged
+        add_log("info", f"[TradeLifecycle][SYNC] Merged disk trades: disk_count={len(disk_trades)} in_memory_count={len(pending_trades)} merged_count={len(merged)}")
+    except Exception:
+        pass
+
+
+def _save_pending_trades_to_disk():
+    """Save current pending trades to disk."""
+    try:
+        from pending_store import save_pending_trades
+        save_pending_trades(pending_trades)
+    except Exception:
+        pass
 
 TRADE_HISTORY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.db")
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json")
@@ -359,6 +384,9 @@ def add_log(level, message):
     last_log.append({"time": ts, "level": "log-" + str(level), "message": str(message)})
     if len(last_log) > 100:
         last_log.pop(0)
+
+
+add_log("info", f"[CONFIG] DEFAULT_RISK_AMOUNT={DEFAULT_RISK_AMOUNT} RISK_PER_TRADE={RISK_PER_TRADE} MAX_OPEN_POSITIONS={MAX_OPEN_POSITIONS} MAX_TOTAL_OPEN_RISK={MAX_TOTAL_OPEN_RISK} RR_RATIO={RR_RATIO} SYMBOL={SYMBOL} TIMEFRAME={TIMEFRAME}")
 
 
 def _current_symbol():
@@ -701,6 +729,7 @@ def _compute_candle_close_unix(trade):
 
 @app.route("/")
 def dashboard():
+    _sync_pending_trades_from_disk()
     connected = _ea_connected()
     account = ea_state.get("account") or None
     current = _current_symbol()
@@ -787,6 +816,7 @@ def api_status():
     total_open_risk = _get_total_open_risk()
 
     pending_ids = list(pending_trades.keys())
+    add_log("info", f"[TradeLifecycle][STATUS] pending_count={len(pending_ids)} pending_trade_ids={pending_ids}")
     add_log("info", f"[STATUS_STATE] pid={os.getpid()} pending_count={len(pending_ids)} pending_ids={pending_ids} requested_trade_id={trade_id or 'none'} armed_count={len([t for t in pending_trades.values() if t.get('status') == 'armed'])} open_positions={open_positions} total_open_risk={total_open_risk:.2f}")
 
     return jsonify({
@@ -998,12 +1028,25 @@ def api_stats():
 
 @app.route("/api/ea/pending", methods=["GET", "POST"])
 def api_ea_pending():
+    _sync_pending_trades_from_disk()
     symbol = _current_symbol()
     ea_state["last_seen"] = datetime.now().isoformat()
     trade_id = request.args.get("trade_id")
     
     pending_ids = list(pending_trades.keys())
     add_log("info", f"[EA_PENDING] pid={os.getpid()} symbol={symbol} requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} pending_ids={pending_ids}")
+    
+    armed = [(tid, t) for tid, t in pending_trades.items() if t.get("status") == "armed"]
+    matching_trade_id = None
+    response_status = "idle"
+    if trade_id and trade_id in pending_trades:
+        matching_trade_id = trade_id
+        response_status = pending_trades[trade_id]["status"]
+    elif armed:
+        matching_trade_id = armed[-1][0]
+        response_status = armed[-1][1]["status"]
+    
+    add_log("info", f"[TradeLifecycle][EA_PENDING_REQUEST] symbol={symbol} requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} matching_trade_id={matching_trade_id or 'none'} response_status={response_status}")
     
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]
@@ -1035,7 +1078,6 @@ def api_ea_pending():
         add_log("info", f"[TradeLifecycle][EA_PENDING_RETURN] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} status={trade['status']} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)}")
         return jsonify(response_data)
 
-    armed = [(tid, t) for tid, t in pending_trades.items() if t.get("status") == "armed"]
     if armed:
         latest_id = armed[-1][0]
         trade = armed[-1][1]
@@ -1199,7 +1241,19 @@ def api_ea_report_execution():
         if status in ("executed", "error", "stale_bar", "cancelled"):
             pending_trades[trade_id]["status"] = status
             add_log("info", f"[TradeLifecycle][PENDING_STATUS_CHANGED] trade_id={trade_id} new_status={status}")
+        if status in ("executed", "cancelled", "error"):
+            history = dict(pending_trades[trade_id])
+            history.pop("stages", None)
+            history.pop("candle_open", None)
+            history.pop("candle_high", None)
+            history.pop("candle_low", None)
+            history.pop("candle_close", None)
+            _save_trade_history_entry(history)
+            del pending_trades[trade_id]
+            _save_pending_trades_to_disk()
+            add_log("info", f"[TradeLifecycle][REMOVED] trade_id={trade_id} reason={status} pending_count_after={len(pending_trades)}")
     ea_state["last_seen"] = datetime.now().isoformat()
+    _save_pending_trades_to_disk()
     return jsonify({"status": "ok"})
 
 
@@ -1730,6 +1784,8 @@ def api_prepare_trade():
 
         trade_id = f"{symbol}_{candle_time_str}_{direction}"
 
+        add_log("info", f"[TradeLifecycle][ARM_REQUEST] trade_id={trade_id} symbol={symbol} direction={direction} manual_sl={sl} risk_amount={risk_amount} rr_ratio={rr_ratio}")
+
         stages = [
             {"name": "Candle Selected", "done": True},
             {"name": "Candle Data Received", "done": True},
@@ -1764,8 +1820,10 @@ def api_prepare_trade():
             "stages": stages,
             "time_remaining": _time_to_close(candle_time_str, timeframe),
         }
+        _save_pending_trades_to_disk()
 
         pending_ids = list(pending_trades.keys())
+        add_log("info", f"[TradeLifecycle][ARM_STORED] trade_id={trade_id} pending_count={len(pending_ids)} pending_trade_keys={pending_ids}")
         add_log("info", f"[ARM_STATE] trade_id={trade_id} symbol={symbol} direction={direction} pending_count={len(pending_ids)} pending_ids={pending_ids} pid={os.getpid()}")
         add_log("info", f"[TradeLifecycle][ARMED] trade_id={trade_id} symbol={symbol} direction={direction} entry={entry} manual_sl={sl} tp={tp} lot={lot} risk={risk_amount} created_at={datetime.now().isoformat()}")
         add_log("info", f"Prepared {direction} {symbol}: entry={entry}, SL={sl}, TP={tp}, lot={lot}")
@@ -1998,6 +2056,7 @@ def _api_execute_trade_impl():
         pending_trades[trade_id]["status"] = "error"
         pending_trades[trade_id]["error"] = "Max positions reached"
         notify(f"⚠️ <b>Max Positions Reached</b>\n{trade_id}\n{len(positions)} open positions, limit {MAX_OPEN_POSITIONS}")
+        _save_pending_trades_to_disk()
         return jsonify({"status": "error", "retcode": 0, "comment": "Max positions reached"}), 200
 
     trade["stages"] = [
@@ -2032,6 +2091,7 @@ def _api_execute_trade_impl():
         pending_trades[trade_id]["queued_for_ea"] = True
         add_log("info", f"Trade queued for EA execution: {direction} {lot} {symbol}")
         notify(f"⏳ <b>Trade Queued for EA Execution</b>\n{direction} {symbol}\nLot: {lot}\nEntry: {entry}\nSL: {sl}\nTP: {tp}")
+        _save_pending_trades_to_disk()
         return jsonify({
             "status": "queued",
             "symbol": symbol,
@@ -2054,6 +2114,7 @@ def _api_execute_trade_impl():
         add_log("error", f"Execution exception: {e}")
         print(f"EXECUTION_FAILED trade_id={trade_id} rc=0 comment={str(e)} result=None")
         notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {str(e)}")
+        _save_pending_trades_to_disk()
         return jsonify({"status": "error", "retcode": 0, "comment": str(e)}), 500
 
     if result and result.retcode == _TRADE_RETCODE_DONE:
@@ -2096,6 +2157,10 @@ def _api_execute_trade_impl():
         trade_history.append(history_entry)
         _save_trade_history_entry(history_entry)
 
+        del pending_trades[trade_id]
+        _save_pending_trades_to_disk()
+        add_log("info", f"[TradeLifecycle][REMOVED] trade_id={trade_id} reason=executed pending_count_after={len(pending_trades)}")
+
         return jsonify({
             "status": "executed",
             "ticket": result.order,
@@ -2115,6 +2180,7 @@ def _api_execute_trade_impl():
         add_log("error", f"Execution failed: retcode={rc}, comment={comment}")
         print(f"EXECUTION_FAILED trade_id={trade_id} rc={rc} comment={comment} result={result}")
         notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {comment}")
+        _save_pending_trades_to_disk()
         return jsonify({
             "status": "error",
             "retcode": rc,
@@ -2137,6 +2203,9 @@ def api_cancel_trade():
     trade["status"] = "cancelled"
     add_log("info", f"Trade {trade_id} cancelled by user")
     notify(f"❌ <b>Trade Cancelled</b>\n{trade_id}")
+    del pending_trades[trade_id]
+    _save_pending_trades_to_disk()
+    add_log("info", f"[TradeLifecycle][REMOVED] trade_id={trade_id} reason=cancelled pending_count_after={len(pending_trades)}")
     return jsonify({"status": "cancelled"})
 
 
