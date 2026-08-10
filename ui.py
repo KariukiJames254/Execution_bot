@@ -738,12 +738,29 @@ def _format_countdown(seconds):
 
 
 def _compute_candle_close_unix(trade):
-    """Compute candle_close_unix from the trade's candle_time, with EA
-    symbol_store as fallback. Trade candle_time is the single source of truth
-    for the countdown because the EA stores the previous bar over the current bar."""
+    """Return the candle close as an absolute UTC Unix timestamp.
+    Prefer the EA's authoritative candle_close_unix from symbol_store,
+    then the trade's candle_time, then recalculate from EA candle time."""
     tf = trade.get("timeframe", TIMEFRAME)
     tf_seconds = TF_SECONDS.get(tf.upper(), 900)
     symbol = trade.get("symbol", _current_symbol())
+
+    try:
+        from symbol_store import get_candle
+        ea_candle = get_candle(symbol, tf)
+        if ea_candle:
+            if ea_candle.get("candle_close_unix") is not None:
+                close_unix = int(float(ea_candle["candle_close_unix"]))
+                add_log("info", f"[CandleCloseUnix] source=ea_candle_close_unix symbol={symbol} tf={tf} candle_close_unix={close_unix}")
+                return close_unix
+            if ea_candle.get("time") is not None:
+                raw_time = ea_candle["time"]
+                close_unix = int(float(raw_time)) + tf_seconds
+                add_log("info", f"[CandleCloseUnix] source=ea_candle_time symbol={symbol} tf={tf} raw_time={raw_time} tf_seconds={tf_seconds} close_unix={close_unix}")
+                return close_unix
+    except Exception as e:
+        add_log("error", f"[CandleCloseUnix] symbol_store exception={e}")
+
     candle_time_str = trade.get("candle_time", "")
     if candle_time_str:
         try:
@@ -751,20 +768,11 @@ def _compute_candle_close_unix(trade):
             if ct.tzinfo is None:
                 ct = ct.replace(tzinfo=timezone.utc)
             close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
-            add_log("info", f"[CandleCloseUnix] trade_candle symbol={symbol} tf={tf} candle_time={candle_time_str} close_unix={close_unix}")
+            add_log("info", f"[CandleCloseUnix] source=trade_candle_time symbol={symbol} tf={tf} candle_time={candle_time_str} close_unix={close_unix}")
             return close_unix
         except Exception as e:
             add_log("error", f"[CandleCloseUnix] trade_candle exception={e}")
-    try:
-        from symbol_store import get_candle
-        ea_candle = get_candle(symbol, tf)
-        if ea_candle and ea_candle.get("time") is not None:
-            raw_time = ea_candle["time"]
-            close_unix = int(float(raw_time)) + tf_seconds
-            add_log("info", f"[CandleCloseUnix] symbol_store symbol={symbol} tf={tf} raw_time={raw_time} tf_seconds={tf_seconds} close_unix={close_unix}")
-            return close_unix
-    except Exception as e:
-        add_log("error", f"[CandleCloseUnix] symbol_store exception={e}")
+
     add_log("error", f"[CandleCloseUnix] NO VALUE symbol={symbol} tf={tf}")
     return 0
 
@@ -790,6 +798,7 @@ def dashboard():
     if not pending:
         candidates = [(tid, t) for tid, t in pending_trades.items()
                       if t.get("symbol") == current and t.get("status") not in VALID_FINAL_STATES]
+        add_log("info", f"[DASHBOARD] trade_id={trade_id or 'none'} candidates={len(candidates)} candidate_ids={[c[0] for c in candidates]}")
         if len(candidates) == 1:
             pending = candidates[0][1]
     if pending:
@@ -797,6 +806,7 @@ def dashboard():
         pending["candle_close_unix"] = candle_close_unix
         pending["time_remaining"] = _time_to_close(candle_close_unix)
         pending["countdown"] = _format_countdown(pending["time_remaining"])
+        add_log("info", f"[DASHBOARD_DEBUG] trade_id={pending.get('trade_id')} symbol={pending.get('symbol')} status={pending.get('status')} candle_time={pending.get('candle_time')} candle_close_unix={candle_close_unix} current_unix={int(datetime.now(timezone.utc).timestamp())} remaining={pending.get('time_remaining')} countdown_str={pending.get('countdown')}")
 
     return render_template(
         "dashboard.html",
@@ -871,6 +881,8 @@ def api_status():
         pending["candle_close_unix"] = candle_close_unix
         countdown = _time_to_close(candle_close_unix)
         stages = pending.get("stages", [])
+        add_log("info", f"[COUNTDOWN_DEBUG] trade_id={pending.get('trade_id')} symbol={pending.get('symbol')} timeframe={pending.get('timeframe')} candle_time={pending.get('candle_time')} candle_close_unix={candle_close_unix} current_unix={int(datetime.now(timezone.utc).timestamp())} remaining={countdown} countdown_str={_format_countdown(countdown)} status={pending.get('status')}")
+        add_log("info", f"[COUNTDOWN_DEBUG] trade_id={pending.get('trade_id')} symbol={pending.get('symbol')} timeframe={pending.get('timeframe')} candle_time={pending.get('candle_time')} candle_close_unix={candle_close_unix} current_unix={int(datetime.now(timezone.utc).timestamp())} remaining={countdown} countdown_str={_format_countdown(countdown)} status={pending.get('status')}")
     
     open_positions = sum(1 for position in ea_state["positions"].values()
                          if position.get("symbol") == current)
@@ -1325,6 +1337,7 @@ def api_ea_report_candle():
     
     _log_candle_stage("EA_REPORT", symbol, timeframe, data, 
                       f"shift={data.get('shift')} series_synced={data.get('series_synced')} bars={data.get('bars_count')}")
+    add_log("info", f"[EA_CANDLE_DEBUG] symbol={symbol} timeframe={timeframe} time={data.get('time')} candle_close_unix={data.get('candle_close_unix')} shift={data.get('shift')}")
     
     ea_state["candles"][symbol] = data
     ea_state["last_seen"] = datetime.now().isoformat()
