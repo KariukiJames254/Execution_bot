@@ -641,26 +641,25 @@ def api_preflight():
     })
 
 
-def _time_to_close(candle_time_str, timeframe):
-    """Return seconds until candle close. Handles both ISO datetime strings
-    and Unix timestamp strings."""
-    tf_seconds = TF_SECONDS.get(timeframe.upper(), 900)
+def _time_to_close(candle_close_unix):
+    """Return seconds until the supplied UTC Unix candle-close timestamp."""
     try:
-        raw = float(candle_time_str)
-        close_unix = int(raw) + tf_seconds
-        return max(0, close_unix - int(datetime.now(timezone.utc).timestamp()))
+        close_unix = int(float(candle_close_unix))
+        if close_unix <= 0:
+            return 0
+
+        now_unix = int(datetime.now(timezone.utc).timestamp())
+        remaining = max(0, close_unix - now_unix)
+
+        add_log(
+            "info",
+            f"[TimeToClose] close_unix={close_unix} "
+            f"now_unix={now_unix} remaining={remaining}"
+        )
+
+        return remaining
+
     except (ValueError, TypeError):
-        pass
-    try:
-        candle_time = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
-        close_time = candle_time + timedelta(seconds=tf_seconds)
-        if candle_time.tzinfo is not None:
-            now = datetime.now(candle_time.tzinfo)
-        else:
-            now = datetime.now()
-        remaining = (close_time - now).total_seconds()
-        return max(0, int(remaining))
-    except Exception:
         return 0
 
 
@@ -684,20 +683,28 @@ def _compute_candle_close_unix(trade):
         from symbol_store import get_candle
         ea_candle = get_candle(symbol, tf)
         if ea_candle and ea_candle.get("time") is not None:
-            return int(float(ea_candle["time"])) + tf_seconds
-    except Exception:
-        pass
+            raw_time = ea_candle["time"]
+            close_unix = int(float(raw_time)) + tf_seconds
+            add_log("info", f"[CandleCloseUnix] symbol={symbol} tf={tf} raw_time={raw_time} tf_seconds={tf_seconds} close_unix={close_unix}")
+            return close_unix
+    except Exception as e:
+        add_log("error", f"[CandleCloseUnix] symbol_store exception={e}")
     candle_time_str = trade.get("candle_time", "")
     if candle_time_str:
         try:
             ct = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
             if ct.tzinfo is None:
                 ct = ct.replace(tzinfo=timezone.utc)
-            return int((ct + timedelta(seconds=tf_seconds)).timestamp())
-        except Exception:
-            pass
+            close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
+            add_log("info", f"[CandleCloseUnix] fallback symbol={symbol} tf={tf} candle_time={candle_time_str} close_unix={close_unix}")
+            return close_unix
+        except Exception as e:
+            add_log("error", f"[CandleCloseUnix] fallback exception={e}")
+    add_log("error", f"[CandleCloseUnix] NO VALUE symbol={symbol} tf={tf}")
     return 0
 
+
+VALID_FINAL_STATES = {"executed", "cancelled", "failed", "error", "market_closed", "blocked_stale_data"}
 
 @app.route("/")
 def dashboard():
@@ -714,8 +721,15 @@ def dashboard():
 
     trade_id = request.args.get("trade_id")
     pending = pending_trades.get(trade_id) if trade_id else None
-    if pending and pending.get("candle_time"):
-        pending["time_remaining"] = _time_to_close(pending["candle_time"], pending.get("timeframe", TIMEFRAME))
+    if not pending:
+        candidates = [(tid, t) for tid, t in pending_trades.items()
+                      if t.get("symbol") == current and t.get("status") not in VALID_FINAL_STATES]
+        if len(candidates) == 1:
+            pending = candidates[0][1]
+    if pending:
+        candle_close_unix = _compute_candle_close_unix(pending)
+        pending["candle_close_unix"] = candle_close_unix
+        pending["time_remaining"] = _time_to_close(candle_close_unix)
         pending["countdown"] = _format_countdown(pending["time_remaining"])
 
     return render_template(
@@ -757,6 +771,7 @@ def api_symbols():
 
 @app.route("/api/status")
 def api_status():
+    _sync_pending_trades_from_disk()
     current = _current_symbol()
     connected = _ea_connected()
     account = ea_state.get("account") or None
@@ -775,11 +790,18 @@ def api_status():
     
     trade_id = request.args.get("trade_id")
     pending = pending_trades.get(trade_id) if trade_id else None
+    if not pending:
+        candidates = [(tid, t) for tid, t in pending_trades.items()
+                      if t.get("symbol") == current and t.get("status") not in VALID_FINAL_STATES]
+        if len(candidates) == 1:
+            pending = candidates[0][1]
     countdown = 0
     stages = []
     open_positions = 0
     if pending:
-        countdown = _time_to_close(pending.get("candle_time", ""), pending.get("timeframe", TIMEFRAME))
+        candle_close_unix = _compute_candle_close_unix(pending)
+        pending["candle_close_unix"] = candle_close_unix
+        countdown = _time_to_close(candle_close_unix)
         stages = pending.get("stages", [])
     
     open_positions = sum(1 for position in ea_state["positions"].values()
@@ -1035,15 +1057,61 @@ def api_ea_pending():
         add_log("info", f"[TradeLifecycle][EA_PENDING_RETURN] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} status={trade['status']} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)}")
         return jsonify(response_data)
 
-    armed = [(tid, t) for tid, t in pending_trades.items() if t.get("status") == "armed"]
-    if armed:
-        latest_id = armed[-1][0]
-        trade = armed[-1][1]
+    symbol_active_trades = [
+        (tid, t) for tid, t in pending_trades.items()
+        if t.get("symbol") == symbol and t.get("status") not in VALID_FINAL_STATES
+    ]
+    matching_trade_id = None
+    response_status = "idle"
+    if trade_id and trade_id in pending_trades:
+        matching_trade_id = trade_id
+        response_status = pending_trades[trade_id]["status"]
+    elif len(symbol_active_trades) == 1:
+        matching_trade_id = symbol_active_trades[0][0]
+        response_status = symbol_active_trades[0][1]["status"]
+    elif len(symbol_active_trades) > 1:
+        response_status = "ambiguous"
+    
+    add_log("info", f"[TradeLifecycle][EA_PENDING_REQUEST] symbol={symbol} requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} matching_trade_id={matching_trade_id or 'none'} response_status={response_status}")
+    
+    close_req = ea_state.pop("close_request", None)
+    
+    if trade_id and trade_id in pending_trades:
+        trade = pending_trades[trade_id]
+        candle_close_unix = _compute_candle_close_unix(trade)
+        tf = trade.get("timeframe", TIMEFRAME)
+        candle_time_str = trade.get("candle_time", "")
+        response_data = {
+            "trade_id": trade["trade_id"],
+            "status": trade["status"],
+            "direction": trade["direction"],
+            "symbol": trade["symbol"],
+            "candle_time": candle_time_str,
+            "timeframe": tf,
+            "candle_close_unix": candle_close_unix,
+            "entry": trade.get("entry", 0),
+            "sl": trade.get("sl", 0),
+            "tp": trade.get("tp", 0),
+            "lot": trade.get("lot", 0),
+            "be_rr": trade.get("be_rr", 0),
+            "be_trigger": trade.get("be_trigger", 0),
+            "manual_sl": trade.get("sl", 0),
+            "risk_amount": trade.get("risk_amount", 0),
+            "rr_ratio": trade.get("rr_ratio", 0),
+            "close_ticket": close_req.get("ticket") if close_req else 0,
+            "close_symbol": close_req.get("symbol", trade.get("symbol", "")) if close_req else "",
+            "error": trade.get("error", ""),
+        }
+        add_log("info", f"[TradeLifecycle][EA_PENDING_RETURN] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} status={trade['status']} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)}")
+        return jsonify(response_data)
+
+    if len(symbol_active_trades) == 1:
+        latest_id = symbol_active_trades[0][0]
+        trade = symbol_active_trades[0][1]
         candle_close_unix = _compute_candle_close_unix(trade)
         tf = trade.get("timeframe", TIMEFRAME)
         candle_time_str = trade.get("candle_time", "")
         trade_symbol = trade.get("symbol", _current_symbol())
-        close_req = ea_state.pop("close_request", None)
         response_data = {
             "trade_id": trade["trade_id"],
             "status": trade["status"],
@@ -1070,7 +1138,17 @@ def api_ea_pending():
         add_log("info", f"[CandlePipeline][EA_PENDING_ARMED] trade_id={latest_id} symbol={trade['symbol']} direction={trade['direction']} candle_time={candle_time_str} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)} manual_sl={trade.get('sl', 0)} risk={trade.get('risk_amount', 0)} rr={trade.get('rr_ratio', 0)}")
         return jsonify(response_data)
 
-    close_req = ea_state.pop("close_request", None)
+    if len(symbol_active_trades) > 1:
+        return jsonify({
+            "status": "ambiguous",
+            "message": f"Multiple pending trades exist for {symbol}",
+            "pending_count": len(symbol_active_trades),
+            "pending_ids": [t[0] for t in symbol_active_trades],
+            "requested_symbol": symbol,
+            "close_ticket": close_req.get("ticket") if close_req else 0,
+            "close_symbol": close_req.get("symbol", symbol) if close_req else "",
+        })
+
     return jsonify({
         "status": "idle",
         "requested_symbol": ea_state.get("requested_symbol") or _current_symbol(),
@@ -1762,7 +1840,7 @@ def api_prepare_trade():
             "candle_close": close,
             "status": "armed",
             "stages": stages,
-            "time_remaining": _time_to_close(candle_time_str, timeframe),
+            "time_remaining": _time_to_close(candle_time_str),
         }
 
         pending_ids = list(pending_trades.keys())
