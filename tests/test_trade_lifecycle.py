@@ -41,7 +41,7 @@ class TradeLifecycleTests(unittest.TestCase):
         self.module._get_open_positions_impl = lambda symbol=None: []
         self.module._get_total_open_risk = lambda: 0.0
         self.module._validate_candle_freshness = lambda symbol, timeframe, candle_data: (True, "Fresh candle")
-        self.module._time_to_close = lambda ct, tf: 60
+        self.module._time_to_close = lambda candle_close_unix: 60
         self.module._compute_candle_close_unix = lambda trade: 9999999999
         self.module._sync_pending_trades_from_disk = lambda: None
         self.module.ea_state["market"]["EURUSD"] = {"bid": 1.15558, "ask": 1.15580}
@@ -299,7 +299,8 @@ class TradeLifecycleTests(unittest.TestCase):
         status_response = self.client.get("/api/status")
         self.assertEqual(status_response.status_code, 200)
         status_data = status_response.get_json()
-        self.assertIsNone(status_data.get("pending_trade"))
+        self.assertIsNotNone(status_data.get("pending_trade"))
+        self.assertEqual(status_data.get("pending_trade", {}).get("trade_id"), trade_id)
         self.assertEqual(status_data.get("open_positions"), 0)
 
         status_with_id = self.client.get(f"/api/status?trade_id={self._encoded_trade_id(trade_id)}")
@@ -403,7 +404,7 @@ class ManualSlExecutionTests(unittest.TestCase):
         self.module._get_open_positions_impl = lambda symbol=None: []
         self.module._get_total_open_risk = lambda: 0.0
         self.module._validate_candle_freshness = lambda symbol, timeframe, candle_data: (True, "Fresh candle")
-        self.module._time_to_close = lambda ct, tf: 60
+        self.module._time_to_close = lambda candle_close_unix: 60
         self.module._compute_candle_close_unix = lambda trade: 9999999999
         self.module._sync_pending_trades_from_disk = lambda: None
         self.module.ea_state["market"]["EURUSD"] = {"bid": 1.15558, "ask": 1.15580}
