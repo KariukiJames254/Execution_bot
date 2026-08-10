@@ -1074,24 +1074,30 @@ def api_ea_pending():
     pending_ids = list(pending_trades.keys())
     add_log("info", f"[EA_PENDING] pid={os.getpid()} symbol={symbol} requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} pending_ids={pending_ids}")
     
-    armed = [(tid, t) for tid, t in pending_trades.items() if t.get("status") == "armed"]
+    symbol_active_trades = [
+        (tid, t) for tid, t in pending_trades.items()
+        if t.get("symbol") == symbol and t.get("status") not in VALID_FINAL_STATES
+    ]
     matching_trade_id = None
     response_status = "idle"
     if trade_id and trade_id in pending_trades:
         matching_trade_id = trade_id
         response_status = pending_trades[trade_id]["status"]
-    elif armed:
-        matching_trade_id = armed[-1][0]
-        response_status = armed[-1][1]["status"]
+    elif len(symbol_active_trades) == 1:
+        matching_trade_id = symbol_active_trades[0][0]
+        response_status = symbol_active_trades[0][1]["status"]
+    elif len(symbol_active_trades) > 1:
+        response_status = "ambiguous"
     
     add_log("info", f"[TradeLifecycle][EA_PENDING_REQUEST] symbol={symbol} requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} matching_trade_id={matching_trade_id or 'none'} response_status={response_status}")
+    
+    close_req = ea_state.pop("close_request", None)
     
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]
         candle_close_unix = _compute_candle_close_unix(trade)
         tf = trade.get("timeframe", TIMEFRAME)
         candle_time_str = trade.get("candle_time", "")
-        close_req = ea_state.pop("close_request", None)
         response_data = {
             "trade_id": trade["trade_id"],
             "status": trade["status"],
@@ -1116,14 +1122,13 @@ def api_ea_pending():
         add_log("info", f"[TradeLifecycle][EA_PENDING_RETURN] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} status={trade['status']} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)}")
         return jsonify(response_data)
 
-    if armed:
-        latest_id = armed[-1][0]
-        trade = armed[-1][1]
+    if len(symbol_active_trades) == 1:
+        latest_id = symbol_active_trades[0][0]
+        trade = symbol_active_trades[0][1]
         candle_close_unix = _compute_candle_close_unix(trade)
         tf = trade.get("timeframe", TIMEFRAME)
         candle_time_str = trade.get("candle_time", "")
         trade_symbol = trade.get("symbol", _current_symbol())
-        close_req = ea_state.pop("close_request", None)
         response_data = {
             "trade_id": trade["trade_id"],
             "status": trade["status"],
@@ -1150,7 +1155,17 @@ def api_ea_pending():
         add_log("info", f"[CandlePipeline][EA_PENDING_ARMED] trade_id={latest_id} symbol={trade['symbol']} direction={trade['direction']} candle_time={candle_time_str} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)} manual_sl={trade.get('sl', 0)} risk={trade.get('risk_amount', 0)} rr={trade.get('rr_ratio', 0)}")
         return jsonify(response_data)
 
-    close_req = ea_state.pop("close_request", None)
+    if len(symbol_active_trades) > 1:
+        return jsonify({
+            "status": "ambiguous",
+            "message": f"Multiple pending trades exist for {symbol}",
+            "pending_count": len(symbol_active_trades),
+            "pending_ids": [t[0] for t in symbol_active_trades],
+            "requested_symbol": symbol,
+            "close_ticket": close_req.get("ticket") if close_req else 0,
+            "close_symbol": close_req.get("symbol", symbol) if close_req else "",
+        })
+
     return jsonify({
         "status": "idle",
         "requested_symbol": ea_state.get("requested_symbol") or _current_symbol(),

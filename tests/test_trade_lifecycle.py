@@ -43,6 +43,7 @@ class TradeLifecycleTests(unittest.TestCase):
         self.module._validate_candle_freshness = lambda symbol, timeframe, candle_data: (True, "Fresh candle")
         self.module._time_to_close = lambda ct, tf: 60
         self.module._compute_candle_close_unix = lambda trade: 9999999999
+        self.module._sync_pending_trades_from_disk = lambda: None
         self.module.ea_state["market"]["EURUSD"] = {"bid": 1.15558, "ask": 1.15580}
         self.module.ea_state["positions"] = {}
         self.client = self.module.app.test_client()
@@ -276,6 +277,98 @@ class TradeLifecycleTests(unittest.TestCase):
         data = status_response.get_json()
         self.assertIsNone(data.get("pending_trade"))
 
+    def test_empty_trade_id_returns_pending_trade_when_unique(self):
+        response = self.client.post(
+            "/api/prepare_trade",
+            json={
+                "symbol": "EURUSD",
+                "direction": "BUY",
+                "high": 1.10000,
+                "low": 1.09000,
+                "close": 1.09500,
+                "open": 1.09800,
+                "time": self._fresh_time(),
+                "manual_sl": 1.08800,
+                "risk_amount": 310,
+                "rr_ratio": 5,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        trade_id = response.get_json()["trade_id"]
+
+        status_response = self.client.get("/api/status")
+        self.assertEqual(status_response.status_code, 200)
+        status_data = status_response.get_json()
+        self.assertIsNone(status_data.get("pending_trade"))
+        self.assertEqual(status_data.get("open_positions"), 0)
+
+        status_with_id = self.client.get(f"/api/status?trade_id={self._encoded_trade_id(trade_id)}")
+        self.assertEqual(status_with_id.status_code, 200)
+        self.assertIsNotNone(status_with_id.get_json().get("pending_trade"))
+
+        for _ in range(3):
+            pending_response = self.client.get("/api/ea/pending?symbol=EURUSD&trade_id=")
+            self.assertEqual(pending_response.status_code, 200)
+            data = pending_response.get_json()
+            self.assertNotEqual(data.get("status"), "idle")
+            self.assertEqual(data["trade_id"], trade_id)
+            self.assertEqual(data["status"], "armed")
+            self.assertEqual(data["direction"], "BUY")
+            self.assertEqual(data["symbol"], "EURUSD")
+            self.assertIn("entry", data)
+            self.assertIn("sl", data)
+            self.assertIn("tp", data)
+            self.assertIn("lot", data)
+
+    def test_empty_trade_id_returns_ambiguous_for_multiple_pending(self):
+        response1 = self.client.post(
+            "/api/prepare_trade",
+            json={
+                "symbol": "EURUSD",
+                "direction": "BUY",
+                "high": 1.10000,
+                "low": 1.09000,
+                "close": 1.09500,
+                "open": 1.09800,
+                "time": self._fresh_time(),
+                "manual_sl": 1.08800,
+                "risk_amount": 310,
+                "rr_ratio": 5,
+            },
+        )
+        self.assertEqual(response1.status_code, 200)
+
+        response2 = self.client.post(
+            "/api/prepare_trade",
+            json={
+                "symbol": "EURUSD",
+                "direction": "SELL",
+                "high": 1.10000,
+                "low": 1.09000,
+                "close": 1.09500,
+                "open": 1.09800,
+                "time": self._fresh_time(),
+                "manual_sl": 1.10200,
+                "risk_amount": 310,
+                "rr_ratio": 5,
+            },
+        )
+        self.assertEqual(response2.status_code, 200)
+
+        pending_response = self.client.get("/api/ea/pending?symbol=EURUSD&trade_id=")
+        self.assertEqual(pending_response.status_code, 200)
+        data = pending_response.get_json()
+        self.assertEqual(data["status"], "ambiguous")
+        self.assertIn("pending_ids", data)
+        self.assertEqual(len(data["pending_ids"]), 2)
+
+    def test_empty_trade_id_returns_idle_when_no_pending(self):
+        self.module.pending_trades = {}
+        pending_response = self.client.get("/api/ea/pending?symbol=EURUSD&trade_id=")
+        self.assertEqual(pending_response.status_code, 200)
+        data = pending_response.get_json()
+        self.assertEqual(data["status"], "idle")
+
 
 class ManualSlExecutionTests(unittest.TestCase):
     def _load_module(self):
@@ -312,6 +405,7 @@ class ManualSlExecutionTests(unittest.TestCase):
         self.module._validate_candle_freshness = lambda symbol, timeframe, candle_data: (True, "Fresh candle")
         self.module._time_to_close = lambda ct, tf: 60
         self.module._compute_candle_close_unix = lambda trade: 9999999999
+        self.module._sync_pending_trades_from_disk = lambda: None
         self.module.ea_state["market"]["EURUSD"] = {"bid": 1.15558, "ask": 1.15580}
         self.module.ea_state["positions"] = {}
         self.client = self.module.app.test_client()
