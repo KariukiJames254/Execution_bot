@@ -1954,7 +1954,11 @@ def api_prepare_trade():
             "candle_close": close,
             "status": "armed",
             "stages": stages,
-            "time_remaining": _time_to_close(candle_time_str),
+            "time_remaining": _time_to_close(_compute_candle_close_unix({
+                "candle_time": candle_time_str,
+                "timeframe": timeframe,
+                "symbol": symbol,
+            })),
         }
         _save_pending_trades_to_disk()
 
