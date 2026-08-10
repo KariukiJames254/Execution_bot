@@ -386,8 +386,55 @@ h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25p
     <div class="value" id="armed_direction" style="color:{{ '#3fb950' if pending_trade and pending_trade.direction == 'BUY' else '#f85149' }};">{{ pending_trade.direction if pending_trade else '' }}</div>
     <label style="margin-top:8px;font-size:11px;color:#8b949e;">Waiting for candle close...</label>
   </div>
-  <button class="btn" style="background:#da3633;color:#fff;" onclick="cancelTrade()">✕ Cancel Pending Trade</button>
+  <button class="btn" style="background:#da3633;color:#fff;" onclick="cancelTrade('{{ pending_trade.trade_id }}')">✕ Cancel Pending Trade</button>
 </div>
+
+{% if all_active_trades and all_active_trades|length > 0 %}
+<h2>Active Pending Trades</h2>
+{% for trade in all_active_trades %}
+<div class="card" style="border-color:#58a6ff;margin-bottom:10px;">
+  <div class="calc-grid">
+    <div class="card">
+      <label>Symbol</label>
+      <div class="value">{{ trade.symbol }}</div>
+    </div>
+    <div class="card">
+      <label>Direction</label>
+      <div class="value" style="color:{{ '#3fb950' if trade.direction == 'BUY' else '#f85149' }};">{{ trade.direction }}</div>
+    </div>
+    <div class="card">
+      <label>Status</label>
+      <div class="value">{{ trade.status|title }}</div>
+    </div>
+    <div class="card">
+      <label>Timeframe</label>
+      <div class="value">{{ trade.timeframe }}</div>
+    </div>
+  </div>
+  <div class="calc-grid" style="margin-top:10px;">
+    <div class="card">
+      <label>Entry</label>
+      <div class="value">{{ '%.5f'|format(trade.entry) }}</div>
+    </div>
+    <div class="card">
+      <label>SL</label>
+      <div class="value">{{ '%.5f'|format(trade.sl) }}</div>
+    </div>
+    <div class="card">
+      <label>TP</label>
+      <div class="value">{{ '%.5f'|format(trade.tp) }}</div>
+    </div>
+    <div class="card">
+      <label>Lot</label>
+      <div class="value">{{ '%.2f'|format(trade.lot) }}</div>
+    </div>
+  </div>
+  <div class="form-row" style="margin-top:10px;">
+    <button class="btn" style="background:#da3633;color:#fff;" onclick="cancelTrade('{{ trade.trade_id }}')">✕ Cancel {{ trade.status|title }} Trade</button>
+  </div>
+</div>
+{% endfor %}
+{% endif %}
 
 <div class="card" style="border-color:#da3633;margin-top:15px;display:none;" id="cancelled_actions">
   <div class="value red" style="text-align:center;">Trade Cancelled</div>
@@ -734,12 +781,9 @@ function fetchCandleData(direction, symbol, riskAmt, rr, beRr, riskMode, manualS
   doFetch();
 }
 
-function cancelTrade() {
-  var urlParams = new URLSearchParams(window.location.search);
-  var tradeId = urlParams.get('trade_id');
-  
+function cancelTrade(tradeId) {
   if (!tradeId) {
-    updateStatus('No active trade to cancel.');
+    updateStatus('No trade selected to cancel.');
     return;
   }
 
@@ -757,8 +801,7 @@ function cancelTrade() {
     if (data.status === 'cancelled') {
       updateStatus('Trade cancelled by user.');
       pendingDirection = null;
-       var sel = getSelectedSymbol();
-       setTimeout(function() { window.location.href = sel ? '/?symbol=' + encodeURIComponent(sel) : '/'; }, 1500);
+      setTimeout(function() { window.location.href = '/'; }, 1500);
     } else {
       updateStatus(data.error || 'Failed to cancel trade.');
     }
