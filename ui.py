@@ -716,10 +716,7 @@ def _time_to_close(candle_time_str, timeframe):
     try:
         candle_time = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
         close_time = candle_time + timedelta(seconds=tf_seconds)
-        if candle_time.tzinfo is not None:
-            now = datetime.now(candle_time.tzinfo)
-        else:
-            now = datetime.now()
+        now = datetime.now(timezone.utc)
         remaining = (close_time - now).total_seconds()
         return max(0, int(remaining))
     except Exception:
@@ -820,6 +817,7 @@ def api_symbols():
 
 @app.route("/api/status")
 def api_status():
+    _sync_pending_trades_from_disk()
     current = _current_symbol()
     connected = _ea_connected()
     account = ea_state.get("account") or None
@@ -840,6 +838,11 @@ def api_status():
     if trade_id:
         trade_id = _normalize_trade_id(trade_id)
     pending = pending_trades.get(trade_id) if trade_id else None
+    if not pending:
+        candidates = [(tid, t) for tid, t in pending_trades.items()
+                      if t.get("symbol") == current and t.get("status") not in VALID_FINAL_STATES]
+        if len(candidates) == 1:
+            pending = candidates[0][1]
     countdown = 0
     stages = []
     open_positions = 0

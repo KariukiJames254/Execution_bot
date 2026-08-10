@@ -480,6 +480,17 @@ void OnTimer()
         if(digitsOnly != "")
             candleCloseTime = (datetime)StringToInteger(digitsOnly);
 
+        Log("========== TIMING DEBUG ==========");
+        Log("Flask candle_close_unix RAW = " + candleCloseStr);
+        Log("Parsed candleCloseTime      = " + (string)candleCloseTime);
+        Log("candleCloseTime             = " + TimeToString(candleCloseTime, TIME_DATE|TIME_SECONDS));
+        Log("TimeCurrent()               = " + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
+        Log("TimeTradeServer()           = " + TimeToString(TimeTradeServer(), TIME_DATE|TIME_SECONDS));
+        Log("TimeLocal()                 = " + TimeToString(TimeLocal(), TIME_DATE|TIME_SECONDS));
+        Log("TimeGMT()                   = " + TimeToString(TimeGMT(), TIME_DATE|TIME_SECONDS));
+        Log("DIFFERENCE                  = " + (string)(candleCloseTime - TimeCurrent()) + " seconds");
+        Log("==================================");
+
         if(candleCloseTime <= 0)
         {
             datetime now = TimeCurrent();
