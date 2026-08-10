@@ -27,6 +27,11 @@ def _save_pending_trades(trades):
         pass
 
 
+def save_pending_trades(trades):
+    """Public wrapper to save pending trades to disk."""
+    _save_pending_trades(trades)
+
+
 def get_all_pending_trades():
     """Return all pending trades (in-memory + disk)."""
     with _lock:

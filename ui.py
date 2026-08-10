@@ -105,6 +105,18 @@ TF_SECONDS = {
     "H12": 43200, "D1": 86400, "W1": 604800, "MN1": 2592000,
 }
 
+TRADE_STATE_ARMED = "armed"
+TRADE_STATE_QUEUED = "queued"
+TRADE_STATE_WAITING_FOR_CANDLE_CLOSE = "waiting_for_candle_close"
+TRADE_STATE_EXECUTING = "executing"
+TRADE_STATE_EXECUTED = "executed"
+TRADE_STATE_FAILED = "failed"
+TRADE_STATE_CANCELLED = "cancelled"
+TRADE_STATE_BLOCKED_STALE_DATA = "blocked_stale_data"
+TRADE_STATE_MARKET_CLOSED = "market_closed"
+
+VALID_FINAL_STATES = {TRADE_STATE_EXECUTED, TRADE_STATE_FAILED, TRADE_STATE_CANCELLED, TRADE_STATE_MARKET_CLOSED, TRADE_STATE_BLOCKED_STALE_DATA}
+
 pending_trades = {}
 trade_history = []
 ea_state = {
@@ -125,12 +137,12 @@ def _sync_pending_trades_from_disk():
         from pending_store import get_all_pending_trades
         global pending_trades
         disk_trades = get_all_pending_trades()
-        merged = dict(disk_trades)
-        for tid, trade in pending_trades.items():
+        merged = dict(pending_trades)
+        for tid, trade in disk_trades.items():
             if tid not in merged:
                 merged[tid] = trade
         pending_trades = merged
-        add_log("info", f"[TradeLifecycle][SYNC] Merged disk trades: disk_count={len(disk_trades)} in_memory_count={len(pending_trades)} merged_count={len(merged)}")
+        add_log("info", f"[TradeLifecycle][SYNC] Merged disk trades: disk_count={len(disk_trades)} in_memory_count={len(merged)} pending_ids={list(pending_trades.keys())}")
     except Exception:
         pass
 
@@ -140,8 +152,8 @@ def _save_pending_trades_to_disk():
     try:
         from pending_store import save_pending_trades
         save_pending_trades(pending_trades)
-    except Exception:
-        pass
+    except Exception as e:
+        add_log("error", f"[PendingTrade] SAVE_FAILED error={e}")
 
 TRADE_HISTORY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.db")
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json")
@@ -387,6 +399,28 @@ def add_log(level, message):
 
 
 add_log("info", f"[CONFIG] DEFAULT_RISK_AMOUNT={DEFAULT_RISK_AMOUNT} RISK_PER_TRADE={RISK_PER_TRADE} MAX_OPEN_POSITIONS={MAX_OPEN_POSITIONS} MAX_TOTAL_OPEN_RISK={MAX_TOTAL_OPEN_RISK} RR_RATIO={RR_RATIO} SYMBOL={SYMBOL} TIMEFRAME={TIMEFRAME}")
+
+
+def _transition_state(trade, new_state, reason=""):
+    old_state = trade.get("status", "unknown")
+    trade["status"] = new_state
+    add_log("info", f"[TradeState] trade_id={trade.get('trade_id')} symbol={trade.get('symbol')} from={old_state} to={new_state} reason={reason}")
+    _save_pending_trades_to_disk()
+
+
+def _normalize_trade_id(trade_id):
+    """Decode URL-encoded trade_id, handling double-encoding safely."""
+    if not trade_id or not isinstance(trade_id, str):
+        return trade_id
+    try:
+        from urllib.parse import unquote
+        decoded = unquote(trade_id)
+        while decoded != trade_id:
+            trade_id = decoded
+            decoded = unquote(trade_id)
+        return trade_id
+    except Exception:
+        return trade_id
 
 
 def _current_symbol():
@@ -803,6 +837,8 @@ def api_status():
             pass
     
     trade_id = request.args.get("trade_id")
+    if trade_id:
+        trade_id = _normalize_trade_id(trade_id)
     pending = pending_trades.get(trade_id) if trade_id else None
     countdown = 0
     stages = []
@@ -1032,6 +1068,8 @@ def api_ea_pending():
     symbol = _current_symbol()
     ea_state["last_seen"] = datetime.now().isoformat()
     trade_id = request.args.get("trade_id")
+    if trade_id:
+        trade_id = _normalize_trade_id(trade_id)
     
     pending_ids = list(pending_trades.keys())
     add_log("info", f"[EA_PENDING] pid={os.getpid()} symbol={symbol} requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} pending_ids={pending_ids}")
@@ -1225,6 +1263,8 @@ def api_ea_report_candle():
 def api_ea_report_execution():
     data = request.get_json(silent=True) or {}
     trade_id = data.get("trade_id")
+    if trade_id:
+        trade_id = _normalize_trade_id(trade_id)
     status = data.get("status", "unknown")
     retcode = data.get("retcode", 0)
     comment = data.get("comment", "")
@@ -1237,12 +1277,23 @@ def api_ea_report_execution():
     add_log("info", f"[TradeLifecycle][EA_REPORT_EXECUTION] trade_id={trade_id} status={status} retcode={retcode} comment={comment} order={order} deal={deal} entry={entry} slippage={slippage} spread={spread}")
     
     if trade_id in pending_trades:
-        pending_trades[trade_id].update(data)
-        if status in ("executed", "error", "stale_bar", "cancelled"):
-            pending_trades[trade_id]["status"] = status
+        trade = pending_trades[trade_id]
+        trade.update(data)
+        if status == "executed":
+            _transition_state(trade, TRADE_STATE_EXECUTED, reason="ea_reported_executed")
+        elif status == "error":
+            _transition_state(trade, TRADE_STATE_FAILED, reason=f"ea_reported_error retcode={retcode} comment={comment}")
+        elif status == "cancelled":
+            _transition_state(trade, TRADE_STATE_CANCELLED, reason="ea_reported_cancelled")
+        elif status == "stale_bar":
+            _transition_state(trade, TRADE_STATE_BLOCKED_STALE_DATA, reason="ea_reported_stale_bar")
+        elif status == "market_closed":
+            _transition_state(trade, TRADE_STATE_MARKET_CLOSED, reason="ea_reported_market_closed")
+        else:
             add_log("info", f"[TradeLifecycle][PENDING_STATUS_CHANGED] trade_id={trade_id} new_status={status}")
-        if status in ("executed", "cancelled", "error"):
-            history = dict(pending_trades[trade_id])
+        
+        if status in VALID_FINAL_STATES:
+            history = dict(trade)
             history.pop("stages", None)
             history.pop("candle_open", None)
             history.pop("candle_high", None)
@@ -1900,13 +1951,7 @@ def _api_execute_trade_impl():
 
     trade_id = raw_id
     if trade_id:
-        try:
-            from urllib.parse import unquote
-            decoded = unquote(trade_id)
-            if decoded in pending_trades:
-                trade_id = decoded
-        except Exception:
-            pass
+        trade_id = _normalize_trade_id(trade_id)
 
     symbol = request.args.get("symbol") or _current_symbol()
     direction = request.args.get("direction")
@@ -1967,33 +2012,50 @@ def _api_execute_trade_impl():
 
     if direction == "BUY":
         entry = ask
-        sl = round(float(candle_low), digits)
-        if entry <= sl:
-            print(f"EXECUTE_TRADE 400: Price moved below candle low bid={bid} ask={ask} sl={sl}")
-            return jsonify({"status": "error", "retcode": 0, "comment": "Price moved below candle low. Trade setup invalid."}), 200
     else:
         entry = bid
-        sl = round(float(candle_high), digits)
-        if entry >= sl:
-            print(f"EXECUTE_TRADE 400: Price moved above candle high bid={bid} ask={ask} sl={sl}")
-            return jsonify({"status": "error", "retcode": 0, "comment": "Price moved above candle high. Trade setup invalid."}), 200
 
-    # Use pre-calculated lot size from arm time; only recalculate as a fallback.
-    lot = trade.get("lot", 0)
-    if not lot or lot <= 0:
-        lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
+    manual_sl = trade.get("sl")
+    if manual_sl is not None and float(manual_sl) > 0:
+        sl = round(float(manual_sl), digits)
+        if direction == "BUY" and sl >= entry:
+            error_msg = f"Invalid manual SL for BUY: SL={sl} must be below execution entry={entry}. Trade rejected."
+            print(f"EXECUTE_TRADE 400: {error_msg}")
+            notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {error_msg}")
+            _transition_state(trade, TRADE_STATE_FAILED, reason="invalid_manual_sl")
+            return jsonify({"status": "error", "retcode": 0, "comment": error_msg}), 200
+        if direction == "SELL" and sl <= entry:
+            error_msg = f"Invalid manual SL for SELL: SL={sl} must be above execution entry={entry}. Trade rejected."
+            print(f"EXECUTE_TRADE 400: {error_msg}")
+            notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {error_msg}")
+            _transition_state(trade, TRADE_STATE_FAILED, reason="invalid_manual_sl")
+            return jsonify({"status": "error", "retcode": 0, "comment": error_msg}), 200
+    else:
+        if direction == "BUY":
+            sl = round(float(candle_low), digits)
+            if entry <= sl:
+                print(f"EXECUTE_TRADE 400: Price moved below candle low bid={bid} ask={ask} sl={sl}")
+                return jsonify({"status": "error", "retcode": 0, "comment": "Price moved below candle low. Trade setup invalid."}), 200
+        else:
+            sl = round(float(candle_high), digits)
+            if entry >= sl:
+                print(f"EXECUTE_TRADE 400: Price moved above candle high bid={bid} ask={ask} sl={sl}")
+                return jsonify({"status": "error", "retcode": 0, "comment": "Price moved above candle high. Trade setup invalid."}), 200
+
+    # Recalculate lot size at execution using fresh price, authoritative SL, and live MT5 specs.
+    lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
     if lot <= 0:
         print(f"EXECUTE_TRADE 400: Invalid lot calculated lot={lot}")
         notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: Invalid lot size calculated (lot={lot})")
+        _transition_state(trade, TRADE_STATE_FAILED, reason="invalid_lot")
         return jsonify({"status": "error", "retcode": 0, "comment": "Invalid lot size calculated"}), 200
     volume_max = info.get("volume_max")
     if volume_max is not None and lot > volume_max:
         add_log("warn", f"Calculated lot {lot} exceeds broker max {volume_max}. Capping.")
         lot = volume_max
 
-    # Calculate TP using the original risk distance (candle close to SL)
-    # so the reward-to-risk ratio stays true to what was calculated at arm time.
-    risk_distance = abs(trade.get("entry", entry) - trade.get("sl", sl))
+    # Calculate TP from fresh execution entry and authoritative SL.
+    risk_distance = abs(entry - sl)
     if direction == "BUY":
         tp = round(entry + risk_distance * rr_ratio, digits)
     else:
@@ -2053,8 +2115,8 @@ def _api_execute_trade_impl():
         return jsonify({"status": "error", "retcode": 0, "comment": "Could not fetch positions"}), 200
     if len(positions) >= MAX_OPEN_POSITIONS:
         print(f"EXECUTE_TRADE 400: Max positions reached {len(positions)}")
-        pending_trades[trade_id]["status"] = "error"
-        pending_trades[trade_id]["error"] = "Max positions reached"
+        _transition_state(trade, TRADE_STATE_FAILED, reason="max_positions_reached")
+        trade["error"] = "Max positions reached"
         notify(f"⚠️ <b>Max Positions Reached</b>\n{trade_id}\n{len(positions)} open positions, limit {MAX_OPEN_POSITIONS}")
         _save_pending_trades_to_disk()
         return jsonify({"status": "error", "retcode": 0, "comment": "Max positions reached"}), 200
@@ -2087,11 +2149,10 @@ def _api_execute_trade_impl():
 
     from execution import execute_buy, execute_sell
     if mt5 is None:
-        pending_trades[trade_id]["status"] = "queued"
-        pending_trades[trade_id]["queued_for_ea"] = True
+        _transition_state(trade, TRADE_STATE_QUEUED, reason="mt5_none_ea_will_execute")
+        trade["queued_for_ea"] = True
         add_log("info", f"Trade queued for EA execution: {direction} {lot} {symbol}")
         notify(f"⏳ <b>Trade Queued for EA Execution</b>\n{direction} {symbol}\nLot: {lot}\nEntry: {entry}\nSL: {sl}\nTP: {tp}")
-        _save_pending_trades_to_disk()
         return jsonify({
             "status": "queued",
             "symbol": symbol,
@@ -2109,31 +2170,30 @@ def _api_execute_trade_impl():
         else:
             result = execute_sell(symbol, lot, sl, tp, comment="EA Trade")
     except Exception as e:
-        pending_trades[trade_id]["status"] = "error"
-        pending_trades[trade_id]["error"] = str(e)
+        _transition_state(trade, TRADE_STATE_FAILED, reason=str(e))
+        trade["error"] = str(e)
         add_log("error", f"Execution exception: {e}")
         print(f"EXECUTION_FAILED trade_id={trade_id} rc=0 comment={str(e)} result=None")
         notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {str(e)}")
-        _save_pending_trades_to_disk()
         return jsonify({"status": "error", "retcode": 0, "comment": str(e)}), 500
 
     if result and result.retcode == _TRADE_RETCODE_DONE:
-        pending_trades[trade_id]["status"] = "executed"
-        pending_trades[trade_id]["stages"][-1]["done"] = True
-        pending_trades[trade_id]["ticket"] = result.order
-        pending_trades[trade_id]["deal"] = result.deal
-        pending_trades[trade_id]["entry"] = entry
-        pending_trades[trade_id]["sl"] = sl
-        pending_trades[trade_id]["tp"] = tp
-        pending_trades[trade_id]["lot"] = lot
-        pending_trades[trade_id]["executed_entry"] = executed_entry
-        pending_trades[trade_id]["slippage"] = slippage
+        _transition_state(trade, TRADE_STATE_EXECUTED, reason="order_send_done")
+        trade["stages"][-1]["done"] = True
+        trade["ticket"] = result.order
+        trade["deal"] = result.deal
+        trade["entry"] = entry
+        trade["sl"] = sl
+        trade["tp"] = tp
+        trade["lot"] = lot
+        trade["executed_entry"] = executed_entry
+        trade["slippage"] = slippage
 
         positions = get_open_positions(symbol)
         if positions:
             for pos in positions:
                 if pos.magic == 123456 and abs(pos.volume - lot) < 0.001:
-                    pending_trades[trade_id]["position_ticket"] = pos.ticket
+                    trade["position_ticket"] = pos.ticket
                     break
 
         add_log("success", f"Executed {direction} {lot} {symbol} entry={executed_entry} SL={sl} TP={tp}")
@@ -2149,7 +2209,7 @@ def _api_execute_trade_impl():
             "tp": tp,
             "status": "Executed",
             "ticket": result.order,
-            "position_ticket": pending_trades[trade_id].get("position_ticket"),
+            "position_ticket": trade.get("position_ticket"),
             "slippage": slippage,
             "risk_amount": risk_amount,
             "rr_ratio": rr_ratio,
@@ -2175,12 +2235,11 @@ def _api_execute_trade_impl():
     else:
         rc = result.retcode if result else 0
         comment = result.comment if result and getattr(result, 'comment', None) else "Execution rejected by broker"
-        pending_trades[trade_id]["status"] = "error"
-        pending_trades[trade_id]["error"] = comment
+        _transition_state(trade, TRADE_STATE_FAILED, reason=f"retcode={rc} comment={comment}")
+        trade["error"] = comment
         add_log("error", f"Execution failed: retcode={rc}, comment={comment}")
         print(f"EXECUTION_FAILED trade_id={trade_id} rc={rc} comment={comment} result={result}")
         notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {comment}")
-        _save_pending_trades_to_disk()
         return jsonify({
             "status": "error",
             "retcode": rc,
@@ -2192,6 +2251,8 @@ def _api_execute_trade_impl():
 def api_cancel_trade():
     data = request.get_json()
     trade_id = data.get("trade_id")
+    if trade_id:
+        trade_id = _normalize_trade_id(trade_id)
     
     if not trade_id or trade_id not in pending_trades:
         return jsonify({"error": "Invalid trade_id"}), 400
@@ -2200,7 +2261,7 @@ def api_cancel_trade():
     if trade.get("status") in ("executed", "cancelled"):
         return jsonify({"error": "Trade already final"}), 400
     
-    trade["status"] = "cancelled"
+    _transition_state(trade, TRADE_STATE_CANCELLED, reason="user_cancelled")
     add_log("info", f"Trade {trade_id} cancelled by user")
     notify(f"❌ <b>Trade Cancelled</b>\n{trade_id}")
     del pending_trades[trade_id]
