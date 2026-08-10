@@ -736,21 +736,12 @@ def _format_countdown(seconds):
 
 
 def _compute_candle_close_unix(trade):
-    """Compute candle_close_unix from the raw EA Unix timestamp, bypassing
-    timezone-naive ISO string round-trips that can produce incorrect values."""
+    """Compute candle_close_unix from the trade's candle_time, with EA
+    symbol_store as fallback. Trade candle_time is the single source of truth
+    for the countdown because the EA stores the previous bar over the current bar."""
     tf = trade.get("timeframe", TIMEFRAME)
     tf_seconds = TF_SECONDS.get(tf.upper(), 900)
     symbol = trade.get("symbol", _current_symbol())
-    try:
-        from symbol_store import get_candle
-        ea_candle = get_candle(symbol, tf)
-        if ea_candle and ea_candle.get("time") is not None:
-            raw_time = ea_candle["time"]
-            close_unix = int(float(raw_time)) + tf_seconds
-            add_log("info", f"[CandleCloseUnix] symbol={symbol} tf={tf} raw_time={raw_time} tf_seconds={tf_seconds} close_unix={close_unix}")
-            return close_unix
-    except Exception as e:
-        add_log("error", f"[CandleCloseUnix] symbol_store exception={e}")
     candle_time_str = trade.get("candle_time", "")
     if candle_time_str:
         try:
@@ -758,10 +749,20 @@ def _compute_candle_close_unix(trade):
             if ct.tzinfo is None:
                 ct = ct.replace(tzinfo=timezone.utc)
             close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
-            add_log("info", f"[CandleCloseUnix] fallback symbol={symbol} tf={tf} candle_time={candle_time_str} close_unix={close_unix}")
+            add_log("info", f"[CandleCloseUnix] trade_candle symbol={symbol} tf={tf} candle_time={candle_time_str} close_unix={close_unix}")
             return close_unix
         except Exception as e:
-            add_log("error", f"[CandleCloseUnix] fallback exception={e}")
+            add_log("error", f"[CandleCloseUnix] trade_candle exception={e}")
+    try:
+        from symbol_store import get_candle
+        ea_candle = get_candle(symbol, tf)
+        if ea_candle and ea_candle.get("time") is not None:
+            raw_time = ea_candle["time"]
+            close_unix = int(float(raw_time)) + tf_seconds
+            add_log("info", f"[CandleCloseUnix] symbol_store symbol={symbol} tf={tf} raw_time={raw_time} tf_seconds={tf_seconds} close_unix={close_unix}")
+            return close_unix
+    except Exception as e:
+        add_log("error", f"[CandleCloseUnix] symbol_store exception={e}")
     add_log("error", f"[CandleCloseUnix] NO VALUE symbol={symbol} tf={tf}")
     return 0
 
