@@ -707,10 +707,13 @@ def _time_to_close(candle_time_str, timeframe):
     """Return seconds until candle close. Handles both ISO datetime strings
     and Unix timestamp strings."""
     tf_seconds = TF_SECONDS.get(timeframe.upper(), 900)
+    add_log("info", f"[TimeToClose] candle_time={candle_time_str} timeframe={timeframe} tf_seconds={tf_seconds}")
     try:
         raw = float(candle_time_str)
         close_unix = int(raw) + tf_seconds
-        return max(0, close_unix - int(datetime.now(timezone.utc).timestamp()))
+        remaining = max(0, close_unix - int(datetime.now(timezone.utc).timestamp()))
+        add_log("info", f"[TimeToClose] unix_path remaining={remaining}")
+        return remaining
     except (ValueError, TypeError):
         pass
     try:
@@ -718,8 +721,11 @@ def _time_to_close(candle_time_str, timeframe):
         close_time = candle_time + timedelta(seconds=tf_seconds)
         now = datetime.now(timezone.utc)
         remaining = (close_time - now).total_seconds()
-        return max(0, int(remaining))
-    except Exception:
+        result = max(0, int(remaining))
+        add_log("info", f"[TimeToClose] iso_path close_time={close_time.isoformat()} now={now.isoformat()} remaining={result}")
+        return result
+    except Exception as e:
+        add_log("error", f"[TimeToClose] exception={e}")
         return 0
 
 
@@ -743,18 +749,24 @@ def _compute_candle_close_unix(trade):
         from symbol_store import get_candle
         ea_candle = get_candle(symbol, tf)
         if ea_candle and ea_candle.get("time") is not None:
-            return int(float(ea_candle["time"])) + tf_seconds
-    except Exception:
-        pass
+            raw_time = ea_candle["time"]
+            close_unix = int(float(raw_time)) + tf_seconds
+            add_log("info", f"[CandleCloseUnix] symbol={symbol} tf={tf} raw_time={raw_time} tf_seconds={tf_seconds} close_unix={close_unix}")
+            return close_unix
+    except Exception as e:
+        add_log("error", f"[CandleCloseUnix] symbol_store exception={e}")
     candle_time_str = trade.get("candle_time", "")
     if candle_time_str:
         try:
             ct = datetime.fromisoformat(str(candle_time_str).replace("Z", "+00:00"))
             if ct.tzinfo is None:
                 ct = ct.replace(tzinfo=timezone.utc)
-            return int((ct + timedelta(seconds=tf_seconds)).timestamp())
-        except Exception:
-            pass
+            close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
+            add_log("info", f"[CandleCloseUnix] fallback symbol={symbol} tf={tf} candle_time={candle_time_str} close_unix={close_unix}")
+            return close_unix
+        except Exception as e:
+            add_log("error", f"[CandleCloseUnix] fallback exception={e}")
+    add_log("error", f"[CandleCloseUnix] NO VALUE symbol={symbol} tf={tf}")
     return 0
 
 
