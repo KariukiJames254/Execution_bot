@@ -1144,7 +1144,6 @@ def api_ea_pending():
         add_log("info", f"[TradeLifecycle][EA_PENDING_RETURN] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} status={trade['status']} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)}")
         return jsonify(response_data)
 
-<<<<<<< HEAD
     symbol_active_trades = [
         (tid, t) for tid, t in pending_trades.items()
         if t.get("symbol") == symbol and t.get("status") not in VALID_FINAL_STATES
