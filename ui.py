@@ -1337,6 +1337,7 @@ def api_ea_report_candle():
             "tick_volume": data.get("tick_volume", 0),
             "spread": data.get("spread", 0),
             "real_volume": data.get("real_volume", 0),
+            "candle_close_unix": data.get("candle_close_unix"),
         }
         set_candle(symbol, timeframe, candle)
         _log_candle_stage("STORED", symbol, timeframe, candle)

@@ -1390,23 +1390,24 @@ void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf)
         double c = iClose(symbol, tf, shift);
         long   v = (long)iVolume(symbol, tf, shift);
 
-        datetime serverTime = TimeCurrent();
+        datetime brokerTime = TimeCurrent();
+        datetime gmtNow = TimeGMT();
+        datetime utcTime = t - (brokerTime - gmtNow);
+        long candleCloseUnix = (long)(utcTime + PeriodSeconds(tf));
+
         long synced = SeriesInfoInteger(symbol, tf, SERIES_SYNCHRONIZED);
         long barsCount = Bars(symbol, tf);
         Log("[TimeDebug] Symbol=" + symbol + " TF=" + tfName + " Shift=" + (string)shift
-            + " MT5Time=" + TimeToString(serverTime)
-            + " TimeLocal=" + TimeToString(TimeLocal())
-            + " TimeTradeServer=" + TimeToString(TimeTradeServer())
-            + " TimeGMT=" + TimeToString(TimeGMT())
-            + " BarOpen=" + TimeToString(t)
-            + " BarClose=" + TimeToString(t + (datetime)(PeriodSeconds(tf)))
-            + " SecondsToClose=" + (string)((int)((t + (datetime)(PeriodSeconds(tf)) - serverTime)))
+            + " brokerTime=" + TimeToString(brokerTime, TIME_DATE|TIME_SECONDS)
+            + " gmtTime=" + TimeToString(gmtNow, TIME_DATE|TIME_SECONDS)
+            + " utcTime=" + TimeToString(utcTime, TIME_DATE|TIME_SECONDS)
+            + " candleCloseUnix=" + (string)candleCloseUnix
             + " SeriesSynced=" + (string)synced
             + " BarsCount=" + (string)barsCount);
 
         string payload = StringFormat(
-            "{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"tick_volume\":%d,\"shift\":%d}",
-            symbol, tfName, (long)t, o, h, l, c, (int)v, shift
+            "{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"tick_volume\":%d,\"shift\":%d,\"candle_close_unix\":%d}",
+            symbol, tfName, (long)utcTime, o, h, l, c, (int)v, shift, candleCloseUnix
         );
         string response;
         string url = FlaskURL + "/api/ea/report_candle";
