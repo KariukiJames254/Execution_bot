@@ -114,8 +114,19 @@ TRADE_STATE_FAILED = "failed"
 TRADE_STATE_CANCELLED = "cancelled"
 TRADE_STATE_BLOCKED_STALE_DATA = "blocked_stale_data"
 TRADE_STATE_MARKET_CLOSED = "market_closed"
+TRADE_STATE_EXPIRED = "expired"
 
-VALID_FINAL_STATES = {TRADE_STATE_EXECUTED, TRADE_STATE_FAILED, TRADE_STATE_CANCELLED, TRADE_STATE_MARKET_CLOSED, TRADE_STATE_BLOCKED_STALE_DATA}
+VALID_FINAL_STATES = {TRADE_STATE_EXECUTED, TRADE_STATE_FAILED, TRADE_STATE_CANCELLED, TRADE_STATE_MARKET_CLOSED, TRADE_STATE_BLOCKED_STALE_DATA, TRADE_STATE_EXPIRED}
+
+CANCELLABLE_STATES = {TRADE_STATE_ARMED, TRADE_STATE_QUEUED, TRADE_STATE_WAITING_FOR_CANDLE_CLOSE}
+
+
+def is_active_pending_trade(trade):
+    """Return True if the trade is an active pending trade that should be shown to the user."""
+    if not trade or not isinstance(trade, dict):
+        return False
+    return trade.get("status") not in VALID_FINAL_STATES
+
 
 pending_trades = {}
 trade_history = []
@@ -154,6 +165,26 @@ def _save_pending_trades_to_disk():
         save_pending_trades(pending_trades)
     except Exception as e:
         add_log("error", f"[PendingTrade] SAVE_FAILED error={e}")
+
+
+def _expire_stale_queued_trades():
+    """Expire queued trades whose candle has already closed."""
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    expired_ids = []
+    for tid, trade in list(pending_trades.items()):
+        if trade.get("status") != TRADE_STATE_QUEUED:
+            continue
+        candle_close_unix = _compute_candle_close_unix(trade)
+        if candle_close_unix > 0 and now_unix >= candle_close_unix:
+            _transition_state(trade, TRADE_STATE_EXPIRED, reason="candle_closed_before_execution")
+            trade["expired_at"] = datetime.now(timezone.utc).isoformat()
+            trade["cancellation_reason"] = "candle_closed_before_execution"
+            trade["candle_close_unix"] = candle_close_unix
+            expired_ids.append(tid)
+            add_log("warn", f"[TradeLifecycle][EXPIRED] trade_id={tid} reason=candle_closed_before_execution candle_close_unix={candle_close_unix}")
+    if expired_ids:
+        _save_pending_trades_to_disk()
+        add_log("info", f"[TradeLifecycle][EXPIRED] expired_count={len(expired_ids)} expired_ids={expired_ids}")
 
 TRADE_HISTORY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.db")
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json")
@@ -739,27 +770,18 @@ def _format_countdown(seconds):
 
 def _compute_candle_close_unix(trade):
     """Return the candle close as an absolute UTC Unix timestamp.
-    Prefer the EA's authoritative candle_close_unix from symbol_store,
-    then the trade's candle_time, then recalculate from EA candle time."""
+    
+    For an existing trade, the stored candle_close_unix is immutable.
+    Only compute from candle_time or symbol_store if not already stored.
+    """
     tf = trade.get("timeframe", TIMEFRAME)
     tf_seconds = TF_SECONDS.get(tf.upper(), 900)
     symbol = trade.get("symbol", _current_symbol())
 
-    try:
-        from symbol_store import get_candle
-        ea_candle = get_candle(symbol, tf)
-        if ea_candle:
-            if ea_candle.get("candle_close_unix") is not None:
-                close_unix = int(float(ea_candle["candle_close_unix"]))
-                add_log("info", f"[CandleCloseUnix] source=ea_candle_close_unix symbol={symbol} tf={tf} candle_close_unix={close_unix}")
-                return close_unix
-            if ea_candle.get("time") is not None:
-                raw_time = ea_candle["time"]
-                close_unix = int(float(raw_time)) + tf_seconds
-                add_log("info", f"[CandleCloseUnix] source=ea_candle_time symbol={symbol} tf={tf} raw_time={raw_time} tf_seconds={tf_seconds} close_unix={close_unix}")
-                return close_unix
-    except Exception as e:
-        add_log("error", f"[CandleCloseUnix] symbol_store exception={e}")
+    stored = trade.get("candle_close_unix")
+    if stored is not None and int(float(stored)) > 0:
+        add_log("info", f"[CandleCloseUnix] source=stored symbol={symbol} tf={tf} candle_close_unix={stored}")
+        return int(float(stored))
 
     candle_time_str = trade.get("candle_time", "")
     if candle_time_str:
@@ -773,11 +795,20 @@ def _compute_candle_close_unix(trade):
         except Exception as e:
             add_log("error", f"[CandleCloseUnix] trade_candle exception={e}")
 
+    try:
+        from symbol_store import get_candle
+        ea_candle = get_candle(symbol, tf)
+        if ea_candle and ea_candle.get("time") is not None:
+            raw_time = ea_candle["time"]
+            close_unix = int(float(raw_time)) + tf_seconds
+            add_log("info", f"[CandleCloseUnix] source=ea_candle_time symbol={symbol} tf={tf} raw_time={raw_time} tf_seconds={tf_seconds} close_unix={close_unix}")
+            return close_unix
+    except Exception as e:
+        add_log("error", f"[CandleCloseUnix] symbol_store exception={e}")
+
     add_log("error", f"[CandleCloseUnix] NO VALUE symbol={symbol} tf={tf}")
     return 0
 
-
-VALID_FINAL_STATES = {"executed", "cancelled", "failed", "error", "market_closed", "blocked_stale_data"}
 
 @app.route("/")
 def dashboard():
@@ -797,9 +828,10 @@ def dashboard():
     pending = pending_trades.get(trade_id) if trade_id else None
     if not pending:
         candidates = [(tid, t) for tid, t in pending_trades.items()
-                      if t.get("symbol") == current and t.get("status") not in VALID_FINAL_STATES]
+                      if t.get("symbol") == current and is_active_pending_trade(t)]
+        candidates.sort(key=lambda x: x[1].get("created_at", ""), reverse=True)
         add_log("info", f"[DASHBOARD] trade_id={trade_id or 'none'} candidates={len(candidates)} candidate_ids={[c[0] for c in candidates]}")
-        if len(candidates) == 1:
+        if len(candidates) >= 1:
             pending = candidates[0][1]
     if pending:
         candle_close_unix = _compute_candle_close_unix(pending)
@@ -807,6 +839,16 @@ def dashboard():
         pending["time_remaining"] = _time_to_close(candle_close_unix)
         pending["countdown"] = _format_countdown(pending["time_remaining"])
         add_log("info", f"[DASHBOARD_DEBUG] trade_id={pending.get('trade_id')} symbol={pending.get('symbol')} status={pending.get('status')} candle_time={pending.get('candle_time')} candle_close_unix={candle_close_unix} current_unix={int(datetime.now(timezone.utc).timestamp())} remaining={pending.get('time_remaining')} countdown_str={pending.get('countdown')}")
+
+    all_active_trades = []
+    for tid, trade in pending_trades.items():
+        if is_active_pending_trade(trade) and trade.get("symbol") == current:
+            trade_copy = dict(trade)
+            trade_copy["candle_close_unix"] = _compute_candle_close_unix(trade_copy)
+            trade_copy["time_remaining"] = _time_to_close(trade_copy["candle_close_unix"])
+            trade_copy["countdown_str"] = _format_countdown(trade_copy["time_remaining"])
+            all_active_trades.append(trade_copy)
+    all_active_trades.sort(key=lambda t: t.get("created_at", ""), reverse=True)
 
     return render_template(
         "dashboard.html",
@@ -824,6 +866,7 @@ def dashboard():
         be_enabled=BE_ENABLED,
         be_rr=BE_RR,
         pending_trade=pending,
+        all_active_trades=all_active_trades,
         trade_history=trade_history[-50:],
         log_entries=reversed(last_log[-50:]),
     )
@@ -1099,6 +1142,30 @@ def api_stats():
     return jsonify(_compute_stats())
 
 
+@app.route("/api/pending-trades")
+def api_pending_trades():
+    _sync_pending_trades_from_disk()
+    _expire_stale_queued_trades()
+    current = _current_symbol()
+    active_trades = []
+    for tid, trade in pending_trades.items():
+        if not is_active_pending_trade(trade):
+            continue
+        if trade.get("symbol") != current:
+            continue
+        candle_close_unix = _compute_candle_close_unix(trade)
+        trade_copy = dict(trade)
+        trade_copy["candle_close_unix"] = candle_close_unix
+        trade_copy["time_remaining"] = _time_to_close(candle_close_unix)
+        trade_copy["countdown_str"] = _format_countdown(trade_copy["time_remaining"])
+        active_trades.append(trade_copy)
+    active_trades.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+    return jsonify({
+        "pending_trades": active_trades,
+        "count": len(active_trades),
+    })
+
+
 @app.route("/api/ea/pending", methods=["GET", "POST"])
 def api_ea_pending():
     _sync_pending_trades_from_disk()
@@ -1204,7 +1271,7 @@ def api_ea_pending():
             "close_symbol": close_req.get("symbol", trade.get("symbol", "")) if close_req else "",
             "error": trade.get("error", ""),
         }
-        add_log("info", f"[TradeLifecycle][EA_PENDING_RETURN] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} status={trade['status']} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)}")
+        add_log("info", f"[TradeLifecycle][EA_PENDING_RETURN] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} status={trade['status']} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)} candle_close_unix={candle_close_unix} time_remaining={_time_to_close(candle_close_unix)}")
         return jsonify(response_data)
 
     if len(symbol_active_trades) == 1:
@@ -1237,7 +1304,7 @@ def api_ea_pending():
             "close_symbol": close_req.get("symbol", trade_symbol) if close_req else "",
             "error": trade.get("error", ""),
         }
-        add_log("info", f"[CandlePipeline][EA_PENDING_ARMED] trade_id={latest_id} symbol={trade['symbol']} direction={trade['direction']} candle_time={candle_time_str} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)} manual_sl={trade.get('sl', 0)} risk={trade.get('risk_amount', 0)} rr={trade.get('rr_ratio', 0)}")
+        add_log("info", f"[CandlePipeline][EA_PENDING_ARMED] trade_id={latest_id} symbol={trade['symbol']} direction={trade['direction']} candle_time={candle_time_str} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)} manual_sl={trade.get('sl', 0)} risk={trade.get('risk_amount', 0)} rr={trade.get('rr_ratio', 0)} candle_close_unix={candle_close_unix} time_remaining={_time_to_close(candle_close_unix)}")
         return jsonify(response_data)
 
     if len(symbol_active_trades) > 1:
@@ -1969,6 +2036,11 @@ def api_prepare_trade():
             "candle_high": high,
             "candle_low": low,
             "candle_close": close,
+            "candle_close_unix": _compute_candle_close_unix({
+                "candle_time": candle_time_str,
+                "timeframe": timeframe,
+                "symbol": symbol,
+            }),
             "status": "armed",
             "stages": stages,
             "time_remaining": _time_to_close(_compute_candle_close_unix({
@@ -2061,6 +2133,8 @@ def _api_execute_trade_impl():
 
     symbol = request.args.get("symbol") or _current_symbol()
     direction = request.args.get("direction")
+    
+    add_log("info", f"[EXECUTION_DEBUG] trade_id={trade_id} symbol={symbol} direction={direction} raw_id={raw_id}")
 
     if not trade_id or trade_id not in pending_trades:
         candidates = [(tid, t) for tid, t in pending_trades.items()
@@ -2364,15 +2438,19 @@ def api_cancel_trade():
         return jsonify({"error": "Invalid trade_id"}), 400
     
     trade = pending_trades[trade_id]
-    if trade.get("status") in ("executed", "cancelled"):
+    if trade.get("status") in VALID_FINAL_STATES:
         return jsonify({"error": "Trade already final"}), 400
     
-    _transition_state(trade, TRADE_STATE_CANCELLED, reason="user_cancelled")
+    if trade.get("status") not in CANCELLABLE_STATES:
+        return jsonify({"error": f"Cannot cancel trade in status: {trade.get('status')}"}), 400
+    
+    _transition_state(trade, TRADE_STATE_CANCELLED, reason="manual_user_cancel")
+    trade["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+    trade["cancellation_reason"] = "manual_user_cancel"
+    _save_pending_trades_to_disk()
     add_log("info", f"Trade {trade_id} cancelled by user")
     notify(f"❌ <b>Trade Cancelled</b>\n{trade_id}")
-    del pending_trades[trade_id]
-    _save_pending_trades_to_disk()
-    add_log("info", f"[TradeLifecycle][REMOVED] trade_id={trade_id} reason=cancelled pending_count_after={len(pending_trades)}")
+    add_log("info", f"[TradeLifecycle][CANCELLED] trade_id={trade_id} reason=manual_user_cancel")
     return jsonify({"status": "cancelled"})
 
 
