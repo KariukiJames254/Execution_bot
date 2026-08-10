@@ -708,6 +708,7 @@ def _time_to_close(candle_close_unix):
     try:
         close_unix = int(float(candle_close_unix))
         if close_unix <= 0:
+            add_log("error", f"[TimeToClose] invalid close_unix={candle_close_unix}")
             return 0
 
         now_unix = int(datetime.now(timezone.utc).timestamp())
@@ -721,7 +722,8 @@ def _time_to_close(candle_close_unix):
 
         return remaining
 
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        add_log("error", f"[TimeToClose] exception={e}")
         return 0
 
 
