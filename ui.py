@@ -1193,8 +1193,6 @@ def api_ea_pending():
         add_log("info", f"[TradeLifecycle][EA_PENDING_RETURN] trade_id={trade_id} symbol={trade['symbol']} direction={trade['direction']} status={trade['status']} entry={trade.get('entry', 0)} sl={trade.get('sl', 0)}")
         return jsonify(response_data)
 
-=======
->>>>>>> 4068274d07dc7b377ec912ecd19b15b3745d7483
     if len(symbol_active_trades) == 1:
         latest_id = symbol_active_trades[0][0]
         trade = symbol_active_trades[0][1]
