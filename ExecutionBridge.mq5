@@ -559,7 +559,7 @@ void OnTimer()
 
     if(currentState == STATE_ARMED && candleCloseTime > 0)
     {
-        datetime now = TimeCurrent();
+        datetime now = TimeGMT();
         datetime currentBarTime = iTime(armedSymbol, _PeriodToTf(armedTfMinutes), 0);
         bool barChanged  = (currentBarTime != armedBarTime);
         bool timeReached = (now >= candleCloseTime);
@@ -575,11 +575,19 @@ void OnTimer()
             LogTimeDiagnostics(armedSymbol, _PeriodToTf(armedTfMinutes));
         }
 
-        Log("CHECK tradeId=" + trackedTradeId + " barChanged=" + (string)barChanged
-            + " timeReached=" + (string)timeReached + " now=" + TimeToString(now) + " close=" + TimeToString((datetime)candleCloseTime)
-            + " staleBar=" + (string)staleBar + " currentBar=" + TimeToString(currentBarTime)
+        long remainingSeconds = (long)candleCloseTime - (long)now;
+
+        Log("CHECK tradeId=" + trackedTradeId
+            + " barChanged=" + (string)barChanged
+            + " timeReached=" + (string)timeReached
+            + " now=" + TimeToString(now, TIME_DATE|TIME_SECONDS)
+            + " close=" + TimeToString(candleCloseTime, TIME_DATE|TIME_SECONDS)
+            + " remaining=" + (string)remainingSeconds + "s"
+            + " staleBar=" + (string)staleBar
+            + " currentBar=" + TimeToString(currentBarTime)
             + " previousBar=" + TimeToString(iTime(armedSymbol, _PeriodToTf(armedTfMinutes), 1))
-            + " serverTime=" + TimeToString(TimeTradeServer()) + " localTime=" + TimeToString(TimeLocal())
+            + " serverTime=" + TimeToString(TimeTradeServer())
+            + " localTime=" + TimeToString(TimeLocal())
             + " gmtTime=" + TimeToString(TimeGMT()));
 
         if(staleBar)
