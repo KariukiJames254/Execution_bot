@@ -55,6 +55,7 @@ double pendingRiskAmount = 310.0;
 double pendingRrRatio = 5.0;
 bool breakEvenApplied = false;
 datetime lastBeAttemptTime = 0;
+long processingCloseTicket = 0;
 
 string lastMarketReport = "";
 
@@ -933,18 +934,28 @@ void ClosePositionByTicket(long ticket, string symbol)
     if(!EnsureSymbol(symbol))
         return;
 
-    // Select position by TICKET, not by symbol, to avoid selecting wrong position
-    if(!PositionSelectByTicket((ulong)ticket))
+    if(processingCloseTicket == ticket)
     {
-        Log("ClosePosition: PositionSelectByTicket failed for ticket=" + (string)ticket);
+        Log("[CLOSE_REQUEST] DUPLICATE SKIP ticket=" + (string)ticket + " symbol=" + symbol);
         return;
     }
 
-    // Verify the selected position matches
+    if(!PositionSelectByTicket((ulong)ticket))
+    {
+        Log("[CLOSE_REQUEST] ALREADY_CLOSED ticket=" + (string)ticket + " symbol=" + symbol + " - position not found");
+        string payload = StringFormat(
+            "{\"ticket\":%d,\"symbol\":\"%s\",\"status\":\"already_closed\"}",
+            (int)ticket, symbol
+        );
+        string response;
+        SendPostRequest(FlaskURL + "/api/ea/report_close", payload, response);
+        return;
+    }
+
     string actualSymbol = PositionGetString(POSITION_SYMBOL);
     if(actualSymbol != symbol)
     {
-        Log("ClosePosition: Ticket " + (string)ticket + " symbol mismatch: expected=" + symbol + " actual=" + actualSymbol);
+        Log("[CLOSE_REQUEST] SYMBOL_MISMATCH ticket=" + (string)ticket + " expected=" + symbol + " actual=" + actualSymbol);
         return;
     }
 
@@ -953,10 +964,15 @@ void ClosePositionByTicket(long ticket, string symbol)
     double posPriceOpen = PositionGetDouble(POSITION_PRICE_OPEN);
     long posTicket = (long)PositionGetInteger(POSITION_TICKET);
 
+    Log("[CLOSE_REQUEST] ticket=" + (string)posTicket + " symbol=" + symbol + " type=" + (string)posType + " volume=" + DoubleToString(posVolume, 2));
+
+    processingCloseTicket = ticket;
+
     MqlTick tick;
     if(!SymbolInfoTick(symbol, tick))
     {
-        Log("ClosePosition: No tick data for " + symbol);
+        Log("[CLOSE_ATTEMPT] NO_TICK ticket=" + (string)posTicket + " symbol=" + symbol);
+        processingCloseTicket = 0;
         return;
     }
 
@@ -998,32 +1014,57 @@ void ClosePositionByTicket(long ticket, string symbol)
     }
     else
     {
-        Log("ClosePosition: Unknown position type: " + (string)posType);
+        Log("[CLOSE_ATTEMPT] UNKNOWN_TYPE ticket=" + (string)posTicket + " type=" + (string)posType);
+        processingCloseTicket = 0;
         return;
     }
 
-    Log("ClosePosition: Sending close ticket=" + (string)posTicket
-        + " symbol=" + symbol + " type=" + (string)posType
-        + " volume=" + (string)posVolume + " price=" + DoubleToString(closePrice, 5)
-        + " pnl=" + DoubleToString(pnl, 2));
+    Log("[CLOSE_ATTEMPT] ticket=" + (string)posTicket + " symbol=" + symbol + " type=" + (string)posType + " volume=" + DoubleToString(posVolume, 2) + " price=" + DoubleToString(closePrice, 5));
 
-    if(!OrderSend(request, result))
+    bool orderSent = OrderSend(request, result);
+    int retcode = (int)result.retcode;
+    string retcodeDesc = result.comment;
+    long dealTicket = result.deal;
+    long orderTicket = result.order;
+
+    Log("[CLOSE_RESULT] ticket=" + (string)posTicket + " retcode=" + (string)retcode + " retcode_description=" + retcodeDesc + " order=" + (string)orderTicket + " deal=" + (string)dealTicket);
+
+    bool positionExistsAfter = false;
+    double remainingVolume = 0;
+
+    if(PositionSelectByTicket((ulong)posTicket))
     {
-        int err = GetLastError();
-        Log("ClosePosition: OrderSend FAILED retcode=" + (string)result.retcode
-            + " err=" + (string)err + " comment=" + result.comment);
+        positionExistsAfter = true;
+        remainingVolume = PositionGetDouble(POSITION_VOLUME);
+    }
+
+    Log("[CLOSE_VERIFY] ticket=" + (string)posTicket + " position_exists=" + (positionExistsAfter ? "true" : "false") + " remaining_volume=" + DoubleToString(remainingVolume, 2));
+
+    string finalStatus = "failed";
+    if(!positionExistsAfter)
+    {
+        finalStatus = "closed";
+        Log("[FINAL_CLOSE_STATE] CLOSED ticket=" + (string)posTicket + " symbol=" + symbol);
+    }
+    else if(orderSent && retcode == 10009)
+    {
+        finalStatus = "closed";
+        Log("[FINAL_CLOSE_STATE] CLOSED ticket=" + (string)posTicket + " symbol=" + symbol);
     }
     else
     {
-        Log("ClosePosition: OrderSend retcode=" + (string)result.retcode
-            + " comment=" + result.comment + " deal=" + (string)result.deal);
-        string payload = StringFormat(
-            "{\"ticket\":%d,\"symbol\":\"%s\",\"status\":\"closed\",\"price\":%.5f,\"pnl\":%.2f,\"retcode\":%d,\"comment\":\"%s\"}",
-            (int)posTicket, symbol, closePrice, pnl, (int)result.retcode, result.comment
-        );
-        string response;
-        SendPostRequest(FlaskURL + "/api/ea/report_close", payload, response);
+        finalStatus = "failed";
+        Log("[FINAL_CLOSE_STATE] FAILED ticket=" + (string)posTicket + " symbol=" + symbol + " retcode=" + (string)retcode + " reason=" + retcodeDesc);
     }
+
+    string payload = StringFormat(
+        "{\"ticket\":%d,\"symbol\":\"%s\",\"status\":\"%s\",\"price\":%.5f,\"pnl\":%.2f,\"retcode\":%d,\"comment\":\"%s\",\"order\":%d,\"deal\":%d,\"volume\":%.2f,\"direction\":\"%s\"}",
+        (int)posTicket, symbol, finalStatus, closePrice, pnl, retcode, retcodeDesc, (int)orderTicket, (int)dealTicket, posVolume, (posType == POSITION_TYPE_BUY ? "BUY" : "SELL")
+    );
+    string response;
+    SendPostRequest(FlaskURL + "/api/ea/report_close", payload, response);
+
+    processingCloseTicket = 0;
 }
 
 bool SendPostRequest(string url, string jsonPayload, string &response)
