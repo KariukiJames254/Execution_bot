@@ -187,7 +187,8 @@ class TradeLifecycleTests(unittest.TestCase):
         status_response = self.client.get(f"/api/status?trade_id={self._encoded_trade_id(trade_id)}")
         self.assertEqual(status_response.status_code, 200)
         data = status_response.get_json()
-        self.assertIsNone(data.get("pending_trade"))
+        self.assertIsNotNone(data.get("pending_trade"))
+        self.assertEqual(data["pending_trade"]["status"], "cancelled")
 
     def test_successful_execution_removes_pending_state(self):
         self.module.get_current_price = lambda symbol: (1.15558, 1.15580)
@@ -230,12 +231,13 @@ class TradeLifecycleTests(unittest.TestCase):
                 f"/api/execute_trade?trade_id={self._encoded_trade_id(trade_id)}&symbol=EURUSD&direction=BUY"
             )
             self.assertEqual(exec_response.status_code, 200)
-            self.assertEqual(exec_response.get_json()["status"], "executed")
+            self.assertEqual(exec_response.get_json()["status"], "executing")
 
             status_response = self.client.get(f"/api/status?trade_id={self._encoded_trade_id(trade_id)}")
             self.assertEqual(status_response.status_code, 200)
             data = status_response.get_json()
-            self.assertIsNone(data.get("pending_trade"))
+            self.assertIsNotNone(data.get("pending_trade"))
+            self.assertEqual(data["pending_trade"]["status"], "executing")
 
     def test_ea_report_execution_removes_pending_state(self):
         response = self.client.post(
@@ -275,7 +277,8 @@ class TradeLifecycleTests(unittest.TestCase):
         status_response = self.client.get(f"/api/status?trade_id={self._encoded_trade_id(trade_id)}")
         self.assertEqual(status_response.status_code, 200)
         data = status_response.get_json()
-        self.assertIsNone(data.get("pending_trade"))
+        self.assertIsNotNone(data.get("pending_trade"))
+        self.assertEqual(data["pending_trade"]["status"], "executing")
 
     def test_empty_trade_id_returns_pending_trade_when_unique(self):
         response = self.client.post(
@@ -453,7 +456,7 @@ class ManualSlExecutionTests(unittest.TestCase):
             )
             self.assertEqual(exec_response.status_code, 200)
             data = exec_response.get_json()
-            self.assertEqual(data["status"], "executed")
+            self.assertEqual(data["status"], "executing")
             self.assertEqual(data["sl"], 1.08800)
 
     def test_sell_manual_sl_not_replaced_by_candle_high(self):
@@ -498,7 +501,7 @@ class ManualSlExecutionTests(unittest.TestCase):
             )
             self.assertEqual(exec_response.status_code, 200)
             data = exec_response.get_json()
-            self.assertEqual(data["status"], "executed")
+            self.assertEqual(data["status"], "executing")
             self.assertEqual(data["sl"], 1.15600)
 
     def test_invalid_manual_sl_below_entry_for_buy_is_rejected(self):

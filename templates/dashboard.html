@@ -316,7 +316,7 @@ h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25p
 <div class="grid">
   <div class="card">
     <label>Current State</label>
-    <div class="value yellow" id="exec_status">{{ pending_trade.status|title }}</div>
+    <div class="value {% if pending_trade.status == 'open' %}green{% elif pending_trade.status == 'executing' %}yellow{% elif pending_trade.status == 'failed' or pending_trade.status == 'error' %}red{% else %}yellow{% endif %}" id="exec_status">{{ pending_trade.status|title }}</div>
     <div class="countdown" id="countdown" style="display:none;">{{ pending_trade.countdown }}</div>
     <label id="countdown_label" style="margin-top:8px;display:none;">Closes In</label>
   </div>
@@ -326,6 +326,25 @@ h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25p
     <label style="margin-top:4px;font-size:11px;color:#8b949e;">SL moves to entry at trigger</label>
   </div>
 </div>
+
+{% if pending_trade.status == 'executing' %}
+<div class="form-row" style="margin-top:15px;display:none;" id="executing_actions">
+  <div class="card" style="flex:1;text-align:center;">
+    <label>Executing</label>
+    <div class="value yellow">Waiting for MT5 confirmation...</div>
+  </div>
+</div>
+{% endif %}
+
+{% if pending_trade.status == 'open' %}
+<div class="form-row" style="margin-top:15px;display:none;" id="open_actions">
+  <div class="card" style="flex:1;text-align:center;">
+    <label>Trade Status</label>
+    <div class="value green">Position Open</div>
+    <label style="margin-top:8px;font-size:11px;color:#8b949e;">Ticket: {{ pending_trade.ticket }}</label>
+  </div>
+</div>
+{% endif %}
 
 <h2>Workflow</h2>
 <div class="card">
@@ -441,7 +460,11 @@ h2 { margin: 30px 0 11px; color: #a8b7ca; font-size: 11px; letter-spacing: 1.25p
 </div>
 
 <div class="card" style="border-color:#da3633;margin-top:15px;display:none;" id="error_actions">
-  <div class="value red" style="text-align:center;">Execution Failed: {{ pending_trade.error if pending_trade else '' }}</div>
+  <div class="value red" style="text-align:center;">Execution Failed</div>
+  <div style="text-align:center;margin-top:8px;font-size:12px;color:#8b949e;">
+    {{ pending_trade.error if pending_trade else '' }}
+    {% if pending_trade.error_code %}Retcode: {{ pending_trade.error_code }}{% endif %}
+  </div>
 </div>
 
 <h2>EA Input</h2>
@@ -912,11 +935,11 @@ function refreshData() {
      var pending = data.pending_trade || {};
      console.log('[UI][PENDING_TRADE] status=' + pending.status + ' trade_id=' + (pending.trade_id || 'none') + ' symbol=' + (pending.symbol || 'none') + ' direction=' + (pending.direction || 'none'));
 
-     if (pending.status === 'armed' || data.open_positions > 0) {
-       setButtonsDisabled(true);
-     } else {
-       setButtonsDisabled(false);
-     }
+    if (pending.status === 'armed' || pending.status === 'executing' || data.open_positions > 0) {
+      setButtonsDisabled(true);
+    } else {
+      setButtonsDisabled(false);
+    }
 
     var openPositionsEl = document.getElementById('open_positions');
     if (openPositionsEl) {
@@ -930,22 +953,26 @@ function refreshData() {
     
     if (!countdownInterval) countdownInterval = setInterval(refreshData, 1000);
     
-    if (pending.status === 'armed' && data.countdown_str) {
+    if ((pending.status === 'armed' || pending.status === 'executing') && data.countdown_str) {
       var countdownEl = document.getElementById('countdown');
       if (countdownEl) countdownEl.textContent = data.countdown_str;
     }
 
     var armedActions = document.getElementById('armed_actions');
+    var executingActions = document.getElementById('executing_actions');
+    var openActions = document.getElementById('open_actions');
     var cancelledActions = document.getElementById('cancelled_actions');
     var errorActions = document.getElementById('error_actions');
     var countdownEl = document.getElementById('countdown');
     var countdownLabel = document.getElementById('countdown_label');
 
     if (armedActions) armedActions.style.display = pending.status === 'armed' ? '' : 'none';
+    if (executingActions) executingActions.style.display = pending.status === 'executing' ? '' : 'none';
+    if (openActions) openActions.style.display = pending.status === 'open' ? '' : 'none';
     if (cancelledActions) cancelledActions.style.display = pending.status === 'cancelled' ? '' : 'none';
-    if (errorActions) errorActions.style.display = (pending.status === 'error' || pending.status === 'market_closed') ? '' : 'none';
-    if (countdownEl) countdownEl.style.display = pending.status === 'armed' ? '' : 'none';
-    if (countdownLabel) countdownLabel.style.display = pending.status === 'armed' ? '' : 'none';
+    if (errorActions) errorActions.style.display = (pending.status === 'error' || pending.status === 'market_closed' || pending.status === 'failed') ? '' : 'none';
+    if (countdownEl) countdownEl.style.display = (pending.status === 'armed' || pending.status === 'executing') ? '' : 'none';
+    if (countdownLabel) countdownLabel.style.display = (pending.status === 'armed' || pending.status === 'executing') ? '' : 'none';
 
     if (pending.stages) {
       var stageList = document.getElementById('stage_list');
@@ -1026,6 +1053,12 @@ function refreshData() {
     tbody.innerHTML = data.items.map(function(trade) {
       var resultColor = trade.result === 'TP' ? '#3fb950' : trade.result === 'SL' ? '#f85149' : trade.result === 'Manual' ? '#d29922' : '#8b949e';
       var resultText = trade.result || trade.status || '';
+      if (trade.status === 'error' || trade.status === 'failed') {
+        resultText = (trade.error_message || trade.status || 'Error');
+        if (trade.error_code) {
+          resultText += ' (code: ' + trade.error_code + ')';
+        }
+      }
       return '<tr>' +
         '<td>' + (trade.time || '') + '</td>' +
         '<td>' + (trade.symbol || '') + '</td>' +
@@ -1034,7 +1067,7 @@ function refreshData() {
         '<td>' + (trade.entry || 0).toFixed(5) + '</td>' +
         '<td>' + (trade.close_price ? trade.close_price.toFixed(5) : '---') + '</td>' +
         '<td style="color:' + (trade.pnl > 0 ? '#3fb950' : trade.pnl < 0 ? '#f85149' : '#8b949e') + ';">' + (trade.pnl ? '$' + trade.pnl.toFixed(2) : '$0.00') + '</td>' +
-        '<td style="color:' + resultColor + ';">' + resultText + '</td>' +
+        '<td style="color:' + resultColor + ';" title="' + (trade.error_message || '') + '">' + resultText + '</td>' +
         '</tr>';
     }).join('');
 

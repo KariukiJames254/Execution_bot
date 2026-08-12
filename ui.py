@@ -109,6 +109,7 @@ TRADE_STATE_ARMED = "armed"
 TRADE_STATE_QUEUED = "queued"
 TRADE_STATE_WAITING_FOR_CANDLE_CLOSE = "waiting_for_candle_close"
 TRADE_STATE_EXECUTING = "executing"
+TRADE_STATE_OPEN = "open"
 TRADE_STATE_EXECUTED = "executed"
 TRADE_STATE_FAILED = "failed"
 TRADE_STATE_CANCELLED = "cancelled"
@@ -116,16 +117,138 @@ TRADE_STATE_BLOCKED_STALE_DATA = "blocked_stale_data"
 TRADE_STATE_MARKET_CLOSED = "market_closed"
 TRADE_STATE_EXPIRED = "expired"
 
-VALID_FINAL_STATES = {TRADE_STATE_EXECUTED, TRADE_STATE_FAILED, TRADE_STATE_CANCELLED, TRADE_STATE_MARKET_CLOSED, TRADE_STATE_BLOCKED_STALE_DATA, TRADE_STATE_EXPIRED}
+VALID_FINAL_STATES = {TRADE_STATE_OPEN, TRADE_STATE_EXECUTED, TRADE_STATE_FAILED, TRADE_STATE_CANCELLED, TRADE_STATE_MARKET_CLOSED, TRADE_STATE_BLOCKED_STALE_DATA, TRADE_STATE_EXPIRED}
 
-CANCELLABLE_STATES = {TRADE_STATE_ARMED, TRADE_STATE_QUEUED, TRADE_STATE_WAITING_FOR_CANDLE_CLOSE}
+CANCELLABLE_STATES = {TRADE_STATE_ARMED, TRADE_STATE_QUEUED, TRADE_STATE_WAITING_FOR_CANDLE_CLOSE, TRADE_STATE_EXECUTING}
 
 
-def is_active_pending_trade(trade):
-    """Return True if the trade is an active pending trade that should be shown to the user."""
-    if not trade or not isinstance(trade, dict):
-        return False
-    return trade.get("status") not in VALID_FINAL_STATES
+def _get_open_positions_impl(symbol=None):
+    try:
+        from broker import ensure_connected
+        import MetaTrader5 as mt5
+        if not ensure_connected():
+            return []
+        if symbol:
+            positions = mt5.positions_get(symbol=symbol)
+        else:
+            positions = mt5.positions_get()
+        if positions is None:
+            return []
+        return list(positions)
+    except Exception:
+        return []
+
+
+def _confirm_position(trade, symbol, lot, magic=123456):
+    """Confirm that an MT5 position exists for the trade. Returns position dict or None."""
+    positions = _get_open_positions_impl(symbol)
+    for pos in positions:
+        if getattr(pos, 'magic', 0) == magic:
+            pos_lot = getattr(pos, 'volume', 0)
+            pos_ticket = getattr(pos, 'ticket', 0)
+            if abs(pos_lot - lot) < 0.001 or pos_ticket == trade.get("ticket"):
+                return {
+                    "ticket": pos_ticket,
+                    "symbol": getattr(pos, 'symbol', symbol),
+                    "volume": pos_lot,
+                    "price_open": getattr(pos, 'price_open', 0),
+                    "sl": getattr(pos, 'sl', 0),
+                    "tp": getattr(pos, 'tp', 0),
+                    "profit": getattr(pos, 'profit', 0),
+                    "type": getattr(pos, 'type', 0),
+                }
+    return None
+
+
+def _notify_trade_opened(trade, position=None):
+    """Send Telegram 'Trade Opened' notification exactly once per trade."""
+    if trade.get("opened_notification_sent"):
+        return
+    ticket = trade.get("ticket") or (position.get("ticket") if position else 0)
+    symbol = trade.get("symbol", "")
+    direction = trade.get("direction", "")
+    entry = trade.get("executed_entry") or trade.get("entry", 0)
+    sl = trade.get("sl", 0)
+    tp = trade.get("tp", 0)
+    lot = trade.get("lot", 0)
+    risk = trade.get("risk_amount", 0)
+    rr = trade.get("rr_ratio", 0)
+    emoji = "🟢" if direction == "BUY" else "🔴"
+    msg = (
+        f"{emoji} <b>Trade Opened</b>\n"
+        f"{direction} {symbol}\n"
+        f"Ticket: {ticket}\n"
+        f"Entry: {entry}\n"
+        f"SL: {sl}\n"
+        f"TP: {tp}\n"
+        f"Lot: {lot}\n"
+        f"Risk: ${risk}\n"
+        f"RR: 1:{rr}"
+    )
+    if position:
+        profit = getattr(position, 'profit', 0)
+        msg += f"\nProfit: ${profit:.2f}"
+    notify(msg)
+    trade["opened_notification_sent"] = True
+    trade["opened_notification_at"] = datetime.now(timezone.utc).isoformat()
+    add_log("info", f"[Notify][OPENED] trade_id={trade.get('trade_id')} ticket={ticket} symbol={symbol} direction={direction}")
+
+
+def _notify_execution_failed(trade, retcode, comment, stage=""):
+    """Send Telegram failure notification with exact MT5 error."""
+    ticket = trade.get("ticket")
+    symbol = trade.get("symbol", "")
+    direction = trade.get("direction", "")
+    entry = trade.get("entry", 0)
+    sl = trade.get("sl", 0)
+    tp = trade.get("tp", 0)
+    lot = trade.get("lot", 0)
+    msg = (
+        f"🔴 <b>Trade Execution Failed</b>\n"
+        f"{direction} {symbol}\n"
+        f"Reason: {comment}\n"
+        f"Retcode: {retcode}\n"
+        f"Lot: {lot}\n"
+        f"Entry: {entry}\n"
+        f"SL: {sl}\n"
+        f"TP: {tp}"
+    )
+    if stage:
+        msg += f"\nStage: {stage}"
+    if ticket:
+        msg += f"\nTicket: {ticket}"
+    notify(msg)
+    add_log("error", f"[Notify][FAILED] trade_id={trade.get('trade_id')} retcode={retcode} comment={comment} stage={stage}")
+
+
+def _try_confirm_and_open(trade, symbol, lot):
+    """Try to confirm position and transition trade to OPEN. Returns True if confirmed."""
+    position = _confirm_position(trade, symbol, lot)
+    if position:
+        _transition_state(trade, TRADE_STATE_OPEN, reason="position_confirmed")
+        trade["position_ticket"] = position.get("ticket")
+        trade["opened_at"] = datetime.now(timezone.utc).isoformat()
+        trade["opened_entry"] = position.get("price_open")
+        trade["opened_profit"] = position.get("profit", 0)
+        _save_pending_trades_to_disk()
+        _notify_trade_opened(trade, position)
+        add_log("success", f"[TradeLifecycle][OPEN] trade_id={trade.get('trade_id')} ticket={position.get('ticket')} symbol={symbol} direction={trade.get('direction')} entry={position.get('price_open')} profit={position.get('profit', 0)}")
+        return True
+    return False
+
+
+def _confirm_executing_trades():
+    """Background check: confirm any EXECUTING trades that have since opened."""
+    for tid, trade in list(pending_trades.items()):
+        if trade.get("status") != TRADE_STATE_EXECUTING:
+            continue
+        if trade.get("opened_notification_sent"):
+            continue
+        symbol = trade.get("symbol", "")
+        lot = trade.get("lot", 0)
+        if not symbol or lot <= 0:
+            continue
+        _try_confirm_and_open(trade, symbol, lot)
 
 
 pending_trades = {}
@@ -281,6 +404,7 @@ def _init_db():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id TEXT NOT NULL UNIQUE,
                 time TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 direction TEXT NOT NULL,
@@ -296,20 +420,30 @@ def _init_db():
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 closed_at TEXT,
                 close_price REAL,
-                pnl REAL DEFAULT 0
+                pnl REAL DEFAULT 0,
+                result TEXT,
+                position_ticket INTEGER,
+                error_code INTEGER DEFAULT 0,
+                error_message TEXT DEFAULT '',
+                execution_stage TEXT DEFAULT ''
             )
         """)
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
-        if "closed_at" not in columns:
-            conn.execute("ALTER TABLE trades ADD COLUMN closed_at TEXT")
-        if "close_price" not in columns:
-            conn.execute("ALTER TABLE trades ADD COLUMN close_price REAL")
-        if "pnl" not in columns:
-            conn.execute("ALTER TABLE trades ADD COLUMN pnl REAL DEFAULT 0")
-        if "result" not in columns:
-            conn.execute("ALTER TABLE trades ADD COLUMN result TEXT")
-        if "position_ticket" not in columns:
-            conn.execute("ALTER TABLE trades ADD COLUMN position_ticket INTEGER")
+        for col, coltype in [
+            ("trade_id", "TEXT NOT NULL DEFAULT ''"),
+            ("closed_at", "TEXT"),
+            ("close_price", "REAL"),
+            ("pnl", "REAL DEFAULT 0"),
+            ("result", "TEXT"),
+            ("position_ticket", "INTEGER"),
+            ("error_code", "INTEGER DEFAULT 0"),
+            ("error_message", "TEXT DEFAULT ''"),
+            ("execution_stage", "TEXT DEFAULT ''"),
+        ]:
+            if col not in columns:
+                conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {coltype}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_trade_id ON trades(trade_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_ticket ON trades(ticket)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_created_at ON trades(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
@@ -388,13 +522,30 @@ def _save_trade_history_entry(entry):
     try:
         conn = _get_db()
         try:
+            trade_id = entry.get("trade_id", "")
+            ticket = entry.get("ticket")
+            now = datetime.now().isoformat()
             conn.execute(
                 """
                 INSERT INTO trades 
-                (time, symbol, direction, lot, entry, sl, tp, status, ticket, position_ticket, slippage, risk_amount, rr_ratio, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (trade_id, time, symbol, direction, lot, entry, sl, tp, status, ticket, 
+                 slippage, risk_amount, rr_ratio, created_at, closed_at, close_price, pnl, 
+                 result, position_ticket, error_code, error_message, execution_stage)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_id) DO UPDATE SET
+                    status = excluded.status,
+                    ticket = excluded.ticket,
+                    closed_at = excluded.closed_at,
+                    close_price = excluded.close_price,
+                    pnl = excluded.pnl,
+                    result = excluded.result,
+                    position_ticket = excluded.position_ticket,
+                    error_code = excluded.error_code,
+                    error_message = excluded.error_message,
+                    execution_stage = excluded.execution_stage
                 """,
                 (
+                    trade_id,
                     entry.get("time", ""),
                     entry.get("symbol", ""),
                     entry.get("direction", ""),
@@ -403,12 +554,19 @@ def _save_trade_history_entry(entry):
                     entry.get("sl", 0),
                     entry.get("tp", 0),
                     entry.get("status", ""),
-                    entry.get("ticket"),
-                    entry.get("position_ticket"),
+                    ticket,
                     entry.get("slippage", 0),
                     entry.get("risk_amount", 0),
                     entry.get("rr_ratio", 0),
-                    datetime.now().isoformat(),
+                    entry.get("created_at", now),
+                    entry.get("closed_at"),
+                    entry.get("close_price"),
+                    entry.get("pnl", 0),
+                    entry.get("result"),
+                    entry.get("position_ticket"),
+                    entry.get("error_code", 0),
+                    entry.get("error_message", ""),
+                    entry.get("execution_stage", ""),
                 ),
             )
             conn.commit()
@@ -891,6 +1049,7 @@ def api_symbols():
 @app.route("/api/status")
 def api_status():
     _sync_pending_trades_from_disk()
+    _confirm_executing_trades()
     current = _current_symbol()
     connected = _ea_connected()
     account = ea_state.get("account") or None
@@ -976,7 +1135,7 @@ def api_history():
         offset = (page - 1) * limit
         rows = conn.execute(
             """
-            SELECT time, symbol, direction, lot, entry, sl, tp, status, ticket, position_ticket, slippage, risk_amount, rr_ratio, close_price, pnl, result
+            SELECT time, symbol, direction, lot, entry, sl, tp, status, ticket, position_ticket, slippage, risk_amount, rr_ratio, close_price, pnl, result, error_code, error_message, execution_stage
             FROM trades
             ORDER BY created_at DESC, id DESC
             LIMIT ? OFFSET ?
@@ -1169,6 +1328,7 @@ def api_pending_trades():
 @app.route("/api/ea/pending", methods=["GET", "POST"])
 def api_ea_pending():
     _sync_pending_trades_from_disk()
+    _confirm_executing_trades()
     symbol = _current_symbol()
     ea_state["last_seen"] = datetime.now().isoformat()
     trade_id = request.args.get("trade_id")
@@ -1449,9 +1609,28 @@ def api_ea_report_execution():
         trade = pending_trades[trade_id]
         trade.update(data)
         if status == "executed":
-            _transition_state(trade, TRADE_STATE_EXECUTED, reason="ea_reported_executed")
+            _transition_state(trade, TRADE_STATE_EXECUTING, reason="ea_reported_executed")
+            trade["execution_retcode"] = retcode
+            trade["execution_comment"] = comment
+            trade["executed_at"] = datetime.now(timezone.utc).isoformat()
+            trade["ticket"] = order
+            trade["deal"] = deal
+            trade["entry"] = entry
+            trade["slippage"] = slippage
+            
+            symbol = trade.get("symbol", _current_symbol())
+            lot = trade.get("lot", 0)
+            confirmed = _try_confirm_and_open(trade, symbol, lot)
+            if not confirmed:
+                add_log("info", f"[TradeLifecycle][EXECUTING] trade_id={trade_id} symbol={symbol} waiting_for_position_confirmation")
         elif status == "error":
             _transition_state(trade, TRADE_STATE_FAILED, reason=f"ea_reported_error retcode={retcode} comment={comment}")
+            trade["error"] = comment
+            trade["error_code"] = retcode
+            trade["execution_stage"] = "ea_report"
+            trade["executed_at"] = datetime.now(timezone.utc).isoformat()
+            add_log("error", f"EA execution failed: retcode={retcode}, comment={comment}")
+            _notify_execution_failed(trade, retcode, comment, stage="ea_report")
         elif status == "cancelled":
             _transition_state(trade, TRADE_STATE_CANCELLED, reason="ea_reported_cancelled")
         elif status == "stale_bar":
@@ -1461,7 +1640,7 @@ def api_ea_report_execution():
         else:
             add_log("info", f"[TradeLifecycle][PENDING_STATUS_CHANGED] trade_id={trade_id} new_status={status}")
         
-        if status in VALID_FINAL_STATES:
+        if status in VALID_FINAL_STATES or trade.get("status") in VALID_FINAL_STATES:
             history = dict(trade)
             history.pop("stages", None)
             history.pop("candle_open", None)
@@ -1469,9 +1648,10 @@ def api_ea_report_execution():
             history.pop("candle_low", None)
             history.pop("candle_close", None)
             _save_trade_history_entry(history)
-            del pending_trades[trade_id]
-            _save_pending_trades_to_disk()
-            add_log("info", f"[TradeLifecycle][REMOVED] trade_id={trade_id} reason={status} pending_count_after={len(pending_trades)}")
+            if trade.get("status") in VALID_FINAL_STATES:
+                del pending_trades[trade_id]
+                _save_pending_trades_to_disk()
+                add_log("info", f"[TradeLifecycle][REMOVED] trade_id={trade_id} reason={status} pending_count_after={len(pending_trades)}")
     ea_state["last_seen"] = datetime.now().isoformat()
     _save_pending_trades_to_disk()
     return jsonify({"status": "ok"})
@@ -2358,7 +2538,7 @@ def _api_execute_trade_impl():
         return jsonify({"status": "error", "retcode": 0, "comment": str(e)}), 500
 
     if result and result.retcode == _TRADE_RETCODE_DONE:
-        _transition_state(trade, TRADE_STATE_EXECUTED, reason="order_send_done")
+        _transition_state(trade, TRADE_STATE_EXECUTING, reason="order_send_done")
         trade["stages"][-1]["done"] = True
         trade["ticket"] = result.order
         trade["deal"] = result.deal
@@ -2368,16 +2548,13 @@ def _api_execute_trade_impl():
         trade["lot"] = lot
         trade["executed_entry"] = executed_entry
         trade["slippage"] = slippage
+        trade["execution_retcode"] = result.retcode
+        trade["execution_comment"] = result.comment if hasattr(result, 'comment') else ""
+        trade["executed_at"] = datetime.now(timezone.utc).isoformat()
 
-        positions = get_open_positions(symbol)
-        if positions:
-            for pos in positions:
-                if pos.magic == 123456 and abs(pos.volume - lot) < 0.001:
-                    trade["position_ticket"] = pos.ticket
-                    break
-
-        add_log("success", f"Executed {direction} {lot} {symbol} entry={executed_entry} SL={sl} TP={tp}")
-        notify(f"✅ <b>Trade Executed</b>\n{direction} {symbol}\nTicket: {result.order}\nEntry: {executed_entry}\nSL: {sl}\nTP: {tp}\nLot: {lot}")
+        confirmed = _try_confirm_and_open(trade, symbol, lot)
+        if not confirmed:
+            add_log("info", f"[TradeLifecycle][EXECUTING] trade_id={trade_id} symbol={symbol} direction={direction} ticket={result.order} waiting_for_position_confirmation")
 
         history_entry = {
             "time": datetime.now().strftime("%H:%M"),
@@ -2387,7 +2564,7 @@ def _api_execute_trade_impl():
             "entry": executed_entry,
             "sl": sl,
             "tp": tp,
-            "status": "Executed",
+            "status": "Executing",
             "ticket": result.order,
             "position_ticket": trade.get("position_ticket"),
             "slippage": slippage,
@@ -2397,12 +2574,10 @@ def _api_execute_trade_impl():
         trade_history.append(history_entry)
         _save_trade_history_entry(history_entry)
 
-        del pending_trades[trade_id]
         _save_pending_trades_to_disk()
-        add_log("info", f"[TradeLifecycle][REMOVED] trade_id={trade_id} reason=executed pending_count_after={len(pending_trades)}")
 
         return jsonify({
-            "status": "executed",
+            "status": "executing",
             "ticket": result.order,
             "deal": result.deal,
             "entry": executed_entry,
@@ -2417,9 +2592,37 @@ def _api_execute_trade_impl():
         comment = result.comment if result and getattr(result, 'comment', None) else "Execution rejected by broker"
         _transition_state(trade, TRADE_STATE_FAILED, reason=f"retcode={rc} comment={comment}")
         trade["error"] = comment
+        trade["error_code"] = rc
+        trade["execution_stage"] = "order_send"
+        trade["executed_at"] = datetime.now(timezone.utc).isoformat()
         add_log("error", f"Execution failed: retcode={rc}, comment={comment}")
         print(f"EXECUTION_FAILED trade_id={trade_id} rc={rc} comment={comment} result={result}")
-        notify(f"⚠️ <b>Execution Failed</b>\n{trade_id}\nError: {comment}")
+        _notify_execution_failed(trade, rc, comment, stage="order_send")
+
+        history_entry = {
+            "time": datetime.now().strftime("%H:%M"),
+            "symbol": symbol,
+            "direction": direction,
+            "lot": lot,
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "status": "error",
+            "ticket": trade.get("ticket"),
+            "position_ticket": None,
+            "slippage": 0,
+            "risk_amount": risk_amount,
+            "rr_ratio": rr_ratio,
+            "error_code": rc,
+            "error_message": comment,
+            "execution_stage": "order_send",
+        }
+        trade_history.append(history_entry)
+        _save_trade_history_entry(history_entry)
+
+        del pending_trades[trade_id]
+        _save_pending_trades_to_disk()
+
         return jsonify({
             "status": "error",
             "retcode": rc,
