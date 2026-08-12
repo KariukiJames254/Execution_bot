@@ -122,6 +122,13 @@ VALID_FINAL_STATES = {TRADE_STATE_OPEN, TRADE_STATE_EXECUTED, TRADE_STATE_FAILED
 CANCELLABLE_STATES = {TRADE_STATE_ARMED, TRADE_STATE_QUEUED, TRADE_STATE_WAITING_FOR_CANDLE_CLOSE, TRADE_STATE_EXECUTING}
 
 
+def is_active_pending_trade(trade):
+    """Return True if the trade is an active pending trade that should be shown to the user."""
+    if not trade or not isinstance(trade, dict):
+        return False
+    return trade.get("status") not in VALID_FINAL_STATES
+
+
 def _get_open_positions_impl(symbol=None):
     try:
         from broker import ensure_connected
