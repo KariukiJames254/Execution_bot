@@ -135,21 +135,35 @@ def execute_sell(symbol, lot, sl, tp, comment=""):
     return _send_order(request, "SELL")
 
 
+class _CloseResult:
+    __slots__ = ("retcode", "comment", "order", "deal", "already_closed", "verified_closed", "volume")
+    def __init__(self, retcode=0, comment="", order=0, deal=0, already_closed=False, verified_closed=False, volume=0.0):
+        self.retcode = retcode
+        self.comment = comment
+        self.order = order
+        self.deal = deal
+        self.already_closed = already_closed
+        self.verified_closed = verified_closed
+        self.volume = volume
+
 def close_position(position_ticket):
     if mt5 is None:
         return None
+
     position = mt5.positions_get(ticket=position_ticket)
     if position is None or len(position) == 0:
-        logger.error(f"Position {position_ticket} not found")
-        return None
+        logger.info(f"[CLOSE_REQUEST] ALREADY_CLOSED ticket={position_ticket}")
+        return _CloseResult(retcode=_TRADE_RETCODE_DONE, comment="Position already closed", already_closed=True, verified_closed=True)
 
     pos = position[0]
     symbol = pos.symbol
     volume = pos.volume
 
+    logger.info(f"[CLOSE_REQUEST] ticket={position_ticket} symbol={symbol} volume={volume} type={pos.type}")
+
     tick = _symbol_info(symbol)
     if tick is None:
-        logger.error(f"Failed to get tick for {symbol}")
+        logger.error(f"[CLOSE_ATTEMPT] NO_TICK ticket={position_ticket} symbol={symbol}")
         return None
 
     if pos.type == _ORDER_TYPE_BUY:
@@ -158,6 +172,8 @@ def close_position(position_ticket):
     else:
         price = tick.ask
         order_type = _ORDER_TYPE_BUY
+
+    logger.info(f"[CLOSE_ATTEMPT] ticket={position_ticket} symbol={symbol} type={order_type} volume={volume} price={price}")
 
     request = {
         "action": _TRADE_ACTION_DEAL,
@@ -172,7 +188,42 @@ def close_position(position_ticket):
         "type_time": _ORDER_TIME_GTC,
         "type_filling": _get_filling(symbol),
     }
-    return _send_order(request, f"CLOSE {pos.type}")
+
+    result = _send_order(request, f"CLOSE {pos.type}")
+
+    if result is not None:
+        logger.info(f"[CLOSE_RESULT] ticket={position_ticket} retcode={result.retcode} comment={result.comment} order={result.order} deal={result.deal}")
+    else:
+        logger.error(f"[CLOSE_RESULT] ticket={position_ticket} retcode=None order_check or order_send failed")
+
+    positions_after = mt5.positions_get(ticket=position_ticket)
+    position_exists_after = positions_after is not None and len(positions_after) > 0
+    remaining_volume = positions_after[0].volume if position_exists_after else 0
+
+    logger.info(f"[CLOSE_VERIFY] ticket={position_ticket} position_exists={position_exists_after} remaining_volume={remaining_volume}")
+
+    if not position_exists_after:
+        logger.info(f"[FINAL_CLOSE_STATE] CLOSED ticket={position_ticket} symbol={symbol}")
+        if result is not None:
+            result.verified_closed = True
+            result.already_closed = False
+            result.volume = volume
+            return result
+        return _CloseResult(retcode=_TRADE_RETCODE_DONE, comment="Position closed (verified)", order=0, deal=0, verified_closed=True, volume=volume)
+
+    if result is not None and result.retcode == _TRADE_RETCODE_DONE:
+        logger.info(f"[FINAL_CLOSE_STATE] CLOSED ticket={position_ticket} symbol={symbol}")
+        result.verified_closed = True
+        result.already_closed = False
+        result.volume = volume
+        return result
+
+    logger.error(f"[FINAL_CLOSE_STATE] FAILED ticket={position_ticket} symbol={symbol} retcode={result.retcode if result else 0} comment={result.comment if result else 'Unknown'}")
+    if result is not None:
+        result.verified_closed = False
+    if result is None:
+        result = _CloseResult(retcode=0, comment="Order send failed", volume=volume)
+    return result
 
 
 def set_break_even(position_ticket, symbol):
