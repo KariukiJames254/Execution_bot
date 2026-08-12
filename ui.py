@@ -1118,6 +1118,7 @@ def api_status():
         "total_open_risk": total_open_risk,
         "max_open_positions": MAX_OPEN_POSITIONS,
         "max_total_open_risk": MAX_TOTAL_OPEN_RISK,
+        "close_request": ea_state.get("close_request"),
     })
 
 
@@ -1664,18 +1665,7 @@ def api_ea_report_execution():
     return jsonify({"status": "ok"})
 
 
-@app.route("/api/ea/report_close", methods=["POST"])
-def api_ea_report_close():
-    data = request.get_json(silent=True) or {}
-    ticket = data.get("ticket")
-    if ticket is None:
-        return jsonify({"error": "Missing ticket"}), 400
-    ea_state["last_seen"] = datetime.now().isoformat()
-    closed_at = datetime.now().isoformat()
-    close_price = data.get("price", 0.0)
-    pnl = data.get("pnl", 0.0)
-    add_log("info", f"Position closed by EA: ticket={ticket} pnl={pnl}")
-    notify(f"🔒 <b>Position Closed</b>\nTicket: {ticket}\nPnL: {pnl}")
+def _update_trade_closed(ticket, close_price=0.0, pnl=0.0):
     try:
         conn = _get_db()
         try:
@@ -1685,13 +1675,74 @@ def api_ea_report_close():
                 SET status = 'Closed', closed_at = ?, close_price = ?, pnl = ?, result = ?
                 WHERE ticket = ? AND status != 'Closed'
                 """,
-                (closed_at, close_price, pnl, "EA Close", int(ticket)),
+                (datetime.now().isoformat(), close_price, pnl, "Manual", ticket),
             )
             conn.commit()
         finally:
             conn.close()
     except Exception as e:
         logger.warning(f"Failed to update trade close: {e}")
+
+
+def _update_trade_failed(ticket, retcode, comment):
+    try:
+        conn = _get_db()
+        try:
+            conn.execute(
+                """
+                UPDATE trades 
+                SET status = 'Failed', error_code = ?, error_message = ?, execution_stage = ?
+                WHERE ticket = ? AND status NOT IN ('Closed', 'Failed')
+                """,
+                (retcode, comment, "manual_close", ticket),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to update trade failed: {e}")
+
+
+@app.route("/api/ea/report_close", methods=["POST"])
+def api_ea_report_close():
+    data = request.get_json(silent=True) or {}
+    ticket = data.get("ticket")
+    status = data.get("status", "unknown")
+    if ticket is None:
+        return jsonify({"error": "Missing ticket"}), 400
+    ea_state["last_seen"] = datetime.now().isoformat()
+
+    close_price = data.get("price", 0.0)
+    pnl = data.get("pnl", 0.0)
+    symbol = data.get("symbol", "")
+    direction = data.get("direction", "")
+    volume = data.get("volume", 0)
+    retcode = data.get("retcode", 0)
+    comment = data.get("comment", "")
+
+    if status == "already_closed":
+        add_log("info", f"[EA_REPORT_CLOSE] ALREADY_CLOSED ticket={ticket}")
+        notify(f"ℹ️ <b>Position Already Closed</b>\nTicket: {ticket}")
+        _update_trade_closed(ticket)
+        ea_state.pop("close_request", None)
+        return jsonify({"status": "ok"})
+
+    if status == "closed":
+        add_log("success", f"[EA_REPORT_CLOSE] CLOSED ticket={ticket} symbol={symbol} price={close_price} pnl={pnl} retcode={retcode}")
+        notify(f"🟢 <b>Position Closed</b>\nTicket: {ticket}\nSymbol: {symbol}\nDirection: {direction}\nVolume: {volume}\nClose Price: {close_price}")
+        _update_trade_closed(ticket, close_price, pnl)
+        ea_state.pop("close_request", None)
+        return jsonify({"status": "ok"})
+
+    if status == "failed":
+        add_log("error", f"[EA_REPORT_CLOSE] FAILED ticket={ticket} retcode={retcode} comment={comment}")
+        notify(f"🔴 <b>Position Close Failed</b>\nTicket: {ticket}\nReason: {comment}")
+        _update_trade_failed(ticket, retcode, comment)
+        ea_state.pop("close_request", None)
+        return jsonify({"status": "ok"})
+
+    add_log("warn", f"[EA_REPORT_CLOSE] UNKNOWN status={status} ticket={ticket}")
+    ea_state.pop("close_request", None)
     return jsonify({"status": "ok"})
 
 
@@ -1861,56 +1912,84 @@ def api_close_position():
         return jsonify({"error": "Missing ticket"}), 400
     if not ensure_connected():
         return jsonify({"error": "Not connected"}), 400
-    result = close_position(int(ticket))
-    if result and result.retcode == _TRADE_RETCODE_DONE:
-        add_log("info", f"Closed position ticket={ticket}")
 
-        closed_at = datetime.now().isoformat()
+    ticket_int = int(ticket)
+
+    if (ea_state.get("close_request") or {}).get("ticket") == ticket_int:
+        add_log("warn", f"[CLOSE_REQUEST] DUPLICATE SKIP ticket={ticket}")
+        return jsonify({"status": "already_processing", "ticket": ticket}), 409
+
+    ea_state.pop("close_request", None)
+
+    if _execution_get_open_positions is not None:
+        try:
+            positions = get_open_positions(_current_symbol())
+            found = any(p.ticket == ticket_int for p in positions)
+            if not found:
+                add_log("info", f"[CLOSE_REQUEST] ALREADY_CLOSED ticket={ticket}")
+                notify(f"ℹ️ <b>Position Already Closed</b>\nTicket: {ticket}")
+                _update_trade_closed(ticket_int)
+                return jsonify({"status": "already_closed", "ticket": ticket})
+        except Exception:
+            pass
+
+    result = close_position(ticket_int)
+
+    if result is None:
+        ea_state["close_request"] = {
+            "ticket": ticket_int,
+            "symbol": data.get("symbol", _current_symbol()),
+            "status": "processing",
+        }
+        add_log("info", f"[CLOSE_REQUEST] QUEUED_FOR_EA ticket={ticket}")
+        notify(f"⏳ <b>Close Request Sent</b>\nTicket: {ticket}\nWaiting for EA confirmation...")
+        return jsonify({"status": "queued_for_ea", "ticket": ticket}), 202
+
+    if result and hasattr(result, 'already_closed') and result.already_closed:
+        add_log("info", f"[CLOSE_REQUEST] ALREADY_CLOSED ticket={ticket}")
+        notify(f"ℹ️ <b>Position Already Closed</b>\nTicket: {ticket}")
+        _update_trade_closed(ticket_int)
+        return jsonify({"status": "already_closed", "ticket": ticket})
+
+    verified_closed = result and hasattr(result, 'verified_closed') and result.verified_closed
+    retcode = getattr(result, 'retcode', 0) if result else 0
+    comment = getattr(result, 'comment', '') if result else 'Unknown'
+
+    if verified_closed or retcode == _TRADE_RETCODE_DONE:
+        add_log("success", f"[CLOSE_REQUEST] CLOSED ticket={ticket} retcode={retcode}")
         close_price = 0.0
         pnl = 0.0
+        direction = ""
+        symbol_str = data.get("symbol", _current_symbol())
         try:
             positions = get_open_positions(_current_symbol())
             for pos in positions:
-                if pos.ticket == int(ticket):
+                if pos.ticket == ticket_int:
                     close_price = pos.price_open
                     pnl = float(pos.profit or 0)
+                    direction = "BUY" if pos.type == 0 else "SELL"
                     break
         except Exception:
             pass
 
-        notify(f"🔒 <b>Trade Closed</b>\nTicket: {ticket}\nPnL: {pnl}\nClosed at: {close_price}")
+        if not verified_closed:
+            positions_after = get_open_positions(_current_symbol())
+            found = any(p.ticket == ticket_int for p in positions_after)
+            if found:
+                add_log("error", f"[CLOSE_REQUEST] FAILED ticket={ticket} retcode={retcode} position still exists")
+                notify(f"🔴 <b>Position Close Failed</b>\nTicket: {ticket}\nReason: {comment}")
+                _update_trade_failed(ticket_int, retcode, comment)
+                return jsonify({"status": "failed", "ticket": ticket, "retcode": retcode, "comment": comment}), 500
 
-        try:
-            conn = _get_db()
-            try:
-                conn.execute(
-                    """
-                    UPDATE trades 
-                    SET status = 'Closed', closed_at = ?, close_price = ?, pnl = ?, result = ?
-                    WHERE ticket = ? AND status != 'Closed'
-                    """,
-                    (closed_at, close_price, pnl, "Manual", int(ticket)),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.warning(f"Failed to update trade close: {e}")
+        notify(f"🟢 <b>Position Closed</b>\nTicket: {ticket}\nSymbol: {symbol_str}\nDirection: {direction}\nVolume: {getattr(result, 'volume', 0)}\nClose Price: {close_price}")
+        _update_trade_closed(ticket_int, close_price, pnl)
+        return jsonify({"status": "closed", "ticket": ticket, "price": close_price, "pnl": pnl, "direction": direction})
 
-        return jsonify({"status": "closed", "ticket": ticket, "pnl": pnl, "close_price": close_price})
-
-    if result is None:
-        ea_state["close_request"] = {
-            "ticket": int(ticket),
-            "symbol": data.get("symbol", _current_symbol()),
-        }
-        add_log("info", f"Close request queued for EA: ticket={ticket}")
-        notify(f"⏳ <b>Close Request Sent</b>\nTicket: {ticket}\nThe EA will close this position on the next tick.")
-        return jsonify({"status": "queued_for_ea", "ticket": ticket}), 202
-
-    rc = result.retcode if result else 0
-    comment = result.comment if result else "Unknown"
-    add_log("error", f"Close failed ticket={ticket} retcode={rc} comment={comment}")
+    rc = getattr(result, 'retcode', 0) if result else 0
+    comment = getattr(result, 'comment', 'Unknown') if result else "Unknown"
+    add_log("error", f"[CLOSE_REQUEST] FAILED ticket={ticket} retcode={rc} comment={comment}")
+    notify(f"🔴 <b>Position Close Failed</b>\nTicket: {ticket}\nReason: {comment}")
+    _update_trade_failed(ticket_int, rc, comment)
     return jsonify({"error": comment, "retcode": rc}), 500
 
 

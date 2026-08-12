@@ -832,6 +832,11 @@ function cancelTrade(tradeId) {
 }
 
 function closePosition(ticket) {
+  if (!ticket) return;
+
+  var statusEl = document.getElementById('exec_status');
+  if (statusEl) statusEl.textContent = 'Closing position ' + ticket + '...';
+
   fetch('/api/close_position', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -839,12 +844,34 @@ function closePosition(ticket) {
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
+    console.log('[UI][CLOSE_RESPONSE]', data);
     if (data.status === 'closed') {
-      updateStatus('Position ' + ticket + ' closed.');
+      updateStatus('Position ' + ticket + ' closed successfully.');
       refreshData();
+    } else if (data.status === 'already_closed') {
+      updateStatus('Position ' + ticket + ' is already closed.');
+      refreshData();
+    } else if (data.status === 'already_processing') {
+      updateStatus('Close already in progress for ' + ticket + '.');
+    } else if (data.status === 'queued_for_ea') {
+      updateStatus('Close request sent for ' + ticket + '. Waiting for EA confirmation...');
+      var pollCount = 0;
+      var pollInterval = setInterval(function() {
+        pollCount++;
+        refreshData();
+        var closeReq = document.querySelector('[data-close-ticket="' + ticket + '"]');
+        if (pollCount > 20) {
+          clearInterval(pollInterval);
+          updateStatus('Close request timeout. Check EA logs.');
+        }
+      }, 1000);
     } else {
-      updateStatus(data.error || 'Failed to close position.');
+      updateStatus('Close failed: ' + (data.error || 'Unknown error'));
     }
+  })
+  .catch(function(err) {
+    console.error('[UI][CLOSE_ERROR]', err);
+    updateStatus('Network error: ' + err.message);
   });
 }
 
@@ -941,6 +968,14 @@ function refreshData() {
       setButtonsDisabled(false);
     }
 
+    if (data.close_request && data.close_request.ticket) {
+      var closeBtns = document.querySelectorAll('.position-row button');
+      closeBtns.forEach(function(btn) {
+        btn.disabled = true;
+        btn.textContent = 'Closing...';
+      });
+    }
+
     var openPositionsEl = document.getElementById('open_positions');
     if (openPositionsEl) {
       openPositionsEl.textContent = (data.open_positions || 0) + ' / ' + (data.max_open_positions || 5);
@@ -1006,7 +1041,7 @@ function refreshData() {
     }
     el.innerHTML = positions.map(function(p) {
       var direction = p.type === 0 || p.type === 'BUY' ? 'BUY' : 'SELL';
-      return '<div class="position-row">' +
+      return '<div class="position-row" data-close-ticket="' + (p.ticket || '') + '">' +
         '<strong style="color:' + (direction === 'BUY' ? '#3fb950' : '#f85149') + '">' + direction + '</strong>' +
         (p.symbol || '') + ' | Vol: ' + (p.volume || 0).toFixed(2) +
         ' | Entry: ' + (p.price_open || 0).toFixed(5) +
