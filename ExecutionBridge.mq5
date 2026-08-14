@@ -415,6 +415,32 @@ void OnTimer()
             _cleanupTrade();
             currentState = STATE_IDLE;
         }
+
+        // Check for close requests even while monitoring a position
+        static datetime lastCloseCheck = 0;
+        if(TimeCurrent() - lastCloseCheck >= 2)
+        {
+            lastCloseCheck = TimeCurrent();
+            string closeUrl = FlaskURL + "/api/ea/pending?symbol=" + eaSymbol;
+            string closeResponse;
+            if(SendGetRequest(closeUrl, closeResponse))
+            {
+                string closeTicketStr = Trim(ExtractJsonValue(closeResponse, "close_ticket"));
+                long closeTicket = 0;
+                if(closeTicketStr != "" && closeTicketStr != "0")
+                    closeTicket = StringToInteger(closeTicketStr);
+                if(closeTicket > 0)
+                {
+                    string closeSymbol = Trim(ExtractJsonValue(closeResponse, "close_symbol"));
+                    if(closeSymbol == "")
+                        closeSymbol = _Symbol;
+                    EnsureSymbol(closeSymbol);
+                    Log("[CLOSE_REQUEST] RECEIVED_IN_EXECUTION ticket=" + (string)closeTicket + " symbol=" + closeSymbol);
+                    ClosePositionByTicket(closeTicket, closeSymbol);
+                }
+            }
+        }
+
         return;
     }
 
@@ -460,6 +486,9 @@ void OnTimer()
 
     if(tradeId == "" || status == "")
     {
+        Log("[TradeLifecycle][EA_PENDING_EMPTY] tradeId=empty status=empty symbol=" + eaSymbol + " trackedTradeId=" + trackedTradeId);
+        return;
+    }
 
     if(targetSymbol != "" && targetSymbol != _Symbol)
     {
@@ -1030,8 +1059,8 @@ void ClosePositionByTicket(long ticket, string symbol)
     {
         Log("[CLOSE_REQUEST] ALREADY_CLOSED ticket=" + (string)ticket + " symbol=" + symbol + " - position not found");
         string payload = StringFormat(
-            "{\"ticket\":%d,\"symbol\":\"%s\",\"status\":\"already_closed\"}",
-            (int)ticket, symbol
+            "{\"ticket\":%lld,\"symbol\":\"%s\",\"status\":\"already_closed\"}",
+            (long long)ticket, symbol
         );
         string response;
         SendPostRequest(FlaskURL + "/api/ea/report_close", payload, response);
@@ -1144,8 +1173,8 @@ void ClosePositionByTicket(long ticket, string symbol)
     }
 
     string payload = StringFormat(
-        "{\"ticket\":%d,\"symbol\":\"%s\",\"status\":\"%s\",\"price\":%.5f,\"pnl\":%.2f,\"retcode\":%d,\"comment\":\"%s\",\"order\":%d,\"deal\":%d,\"volume\":%.2f,\"direction\":\"%s\"}",
-        (int)posTicket, symbol, finalStatus, closePrice, pnl, retcode, retcodeDesc, (int)orderTicket, (int)dealTicket, posVolume, (posType == POSITION_TYPE_BUY ? "BUY" : "SELL")
+        "{\"ticket\":%lld,\"symbol\":\"%s\",\"status\":\"%s\",\"price\":%.5f,\"pnl\":%.2f,\"retcode\":%d,\"comment\":\"%s\",\"order\":%lld,\"deal\":%lld,\"volume\":%.2f,\"direction\":\"%s\"}",
+        (long long)posTicket, symbol, finalStatus, closePrice, pnl, retcode, retcodeDesc, (long long)orderTicket, (long long)dealTicket, posVolume, (posType == POSITION_TYPE_BUY ? "BUY" : "SELL")
     );
     string response;
     SendPostRequest(FlaskURL + "/api/ea/report_close", payload, response);
@@ -1276,10 +1305,10 @@ void ReportExecutionDetailed(string tradeId, string status, int retcode, string 
     double volume = pendingLot;
 
     string payload = StringFormat(
-        "{\"trade_id\":\"%s\",\"status\":\"%s\",\"ticket\":%d,\"deal\":%d,"
+        "{\"trade_id\":\"%s\",\"status\":\"%s\",\"ticket\":%lld,\"deal\":%lld,"
         "\"entry\":%.8f,\"slippage\":%.8f,\"spread\":%.8f,\"retcode\":%d,"
         "\"comment\":\"%s\",\"volume\":%.2f,\"symbol\":\"%s\",\"direction\":\"%s\"}",
-        tradeId, status, (int)ticket, (int)deal, entry, slippage, spread, retcode, comment,
+        tradeId, status, (long long)ticket, (long long)deal, entry, slippage, spread, retcode, comment,
         volume, execSymbol, direction
     );
 
@@ -1315,7 +1344,7 @@ void ReportPosition()
 
     string payload = StringFormat(
         "{\"ticket\":%d,\"symbol\":\"%s\",\"direction\":\"%s\",\"lot\":%.2f,\"entry\":%.5f,\"sl\":%.5f,\"tp\":%.5f,\"profit\":%.2f}",
-        (int)ticket, symbol, direction, volume, price, sl, tp, profit
+        (long)ticket, symbol, direction, volume, price, sl, tp, profit
     );
 
     string response;
