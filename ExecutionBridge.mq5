@@ -218,7 +218,7 @@ void LogTimeDiagnostics(string symbol, ENUM_TIMEFRAMES tf)
     }
 
     long periodSeconds = PeriodSeconds(tf);
-    datetime barClose0 = (bar0 > 0) ? (bar0 + periodSeconds) : 0;
+    datetime barClose0 = (bar0 > 0) ? (datetime)(bar0 + periodSeconds) : 0;
     long secondsToClose = (barClose0 > 0) ? (long)(barClose0 - now) : 0;
 
     Log("[TimeDiagnostic] Symbol=" + symbol + " TF=" + TimeframeToString(tf) +
@@ -883,7 +883,7 @@ void ExecuteTradeLocal()
         " deviation=" + (string)request.deviation + " magic=" + (string)request.magic +
         " filling=" + (string)request.type_filling + " type_time=" + (string)request.type_time);
 
-    MqlTradeCheck check = {};
+    MqlTradeCheckResult check = {};
     if(!OrderCheck(request, check))
     {
         int checkErr = GetLastError();
@@ -965,7 +965,7 @@ void ExecuteTradeLocal()
                 orderSuccess = true;
                 lastRetcode = 10009;
                 lastComment = "Position confirmed after 4756";
-                lastOrder = PositionGetInteger(POSITION_TICKET);
+                lastOrder = (ulong)PositionGetInteger(POSITION_TICKET);
                 lastDeal = 0;
                 break;
             }
@@ -1112,8 +1112,8 @@ void ClosePositionByTicket(long ticket, string symbol)
     bool orderSent = OrderSend(request, result);
     int retcode = (int)result.retcode;
     string retcodeDesc = result.comment;
-    long dealTicket = result.deal;
-    long orderTicket = result.order;
+    ulong dealTicket = result.deal;
+    ulong orderTicket = result.order;
 
     Log("[CLOSE_RESULT] ticket=" + (string)posTicket + " retcode=" + (string)retcode + " retcode_description=" + retcodeDesc + " order=" + (string)orderTicket + " deal=" + (string)dealTicket);
 
