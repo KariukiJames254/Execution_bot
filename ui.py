@@ -601,6 +601,14 @@ def _transition_state(trade, new_state, reason=""):
     old_state = trade.get("status", "unknown")
     trade["status"] = new_state
     add_log("info", f"[TradeState] trade_id={trade.get('trade_id')} symbol={trade.get('symbol')} from={old_state} to={new_state} reason={reason}")
+    if new_state in VALID_FINAL_STATES:
+        history = dict(trade)
+        history.pop("stages", None)
+        history.pop("candle_open", None)
+        history.pop("candle_high", None)
+        history.pop("candle_low", None)
+        history.pop("candle_close", None)
+        _save_trade_history_entry(history)
     _save_pending_trades_to_disk()
 
 
@@ -1921,11 +1929,10 @@ def api_close_position():
 
     ea_state.pop("close_request", None)
 
-    if _execution_get_open_positions is not None:
+    if mt5 is not None:
         try:
-            positions = get_open_positions(_current_symbol())
-            found = any(p.ticket == ticket_int for p in positions)
-            if not found:
+            positions = mt5.positions_get(ticket=ticket_int)
+            if positions is None or len(positions) == 0:
                 add_log("info", f"[CLOSE_REQUEST] ALREADY_CLOSED ticket={ticket}")
                 notify(f"ℹ️ <b>Position Already Closed</b>\nTicket: {ticket}")
                 _update_trade_closed(ticket_int)
@@ -1957,17 +1964,16 @@ def api_close_position():
 
     if verified_closed or retcode == _TRADE_RETCODE_DONE:
         add_log("success", f"[CLOSE_REQUEST] CLOSED ticket={ticket} retcode={retcode}")
-        close_price = 0.0
+        symbol_str = getattr(result, 'symbol', '') or data.get("symbol", _current_symbol())
+        direction = getattr(result, 'direction', '')
+        close_price = getattr(result, 'close_price', 0.0)
+        volume = getattr(result, 'volume', 0)
         pnl = 0.0
-        direction = ""
-        symbol_str = data.get("symbol", _current_symbol())
         try:
             positions = get_open_positions(_current_symbol())
             for pos in positions:
                 if pos.ticket == ticket_int:
-                    close_price = pos.price_open
                     pnl = float(pos.profit or 0)
-                    direction = "BUY" if pos.type == 0 else "SELL"
                     break
         except Exception:
             pass
@@ -1981,9 +1987,9 @@ def api_close_position():
                 _update_trade_failed(ticket_int, retcode, comment)
                 return jsonify({"status": "failed", "ticket": ticket, "retcode": retcode, "comment": comment}), 500
 
-        notify(f"🟢 <b>Position Closed</b>\nTicket: {ticket}\nSymbol: {symbol_str}\nDirection: {direction}\nVolume: {getattr(result, 'volume', 0)}\nClose Price: {close_price}")
+        notify(f"🟢 <b>Position Closed</b>\nTicket: {ticket}\nSymbol: {symbol_str}\nDirection: {direction}\nVolume: {volume}\nClose Price: {close_price}")
         _update_trade_closed(ticket_int, close_price, pnl)
-        return jsonify({"status": "closed", "ticket": ticket, "price": close_price, "pnl": pnl, "direction": direction})
+        return jsonify({"status": "closed", "ticket": ticket, "symbol": symbol_str, "price": close_price, "pnl": pnl, "direction": direction})
 
     rc = getattr(result, 'retcode', 0) if result else 0
     comment = getattr(result, 'comment', 'Unknown') if result else "Unknown"
@@ -1995,89 +2001,133 @@ def api_close_position():
 
 @app.route("/api/monitor")
 def api_monitor():
-    # Position and account updates are supplied by the MT5 EA.
-    return jsonify({"status": "ok"})
+    if mt5 is None:
+        return jsonify({"status": "ok"})
 
     if not is_connected():
         return jsonify({"status": "ok"})
 
-    conn = _get_db()
     try:
-        rows = conn.execute(
-            "SELECT ticket, position_ticket, symbol, direction, sl, tp FROM trades WHERE status='Executed'"
-        ).fetchall()
-    finally:
-        conn.close()
-
-    for row in rows:
-        deal_ticket = row["ticket"]
-        position_ticket = row["position_ticket"]
-        symbol = row["symbol"]
-        positions = get_open_positions(symbol)
-        if positions is None:
-            print(f"MONITOR: positions is None for {symbol}")
-            continue
-
-        if position_ticket:
-            found = any(p.ticket == position_ticket for p in positions)
-        else:
-            found = len(positions) > 0
-
-        if found:
-            continue
-
-        print(f"MONITOR: closed trade detected ticket={deal_ticket} position_ticket={position_ticket}")
-
-        try:
-            history = None
-            if position_ticket:
-                history = mt5.history_deals_get(position=position_ticket)
-            if not history:
-                history = mt5.history_deals_get(ticket=deal_ticket)
-            if history is None or len(history) == 0:
-                print(f"MONITOR: no history deals found for ticket={deal_ticket} position_ticket={position_ticket}")
-                continue
-
-            close_deal = None
-            for deal in history:
-                if deal.entry == mt5.DEAL_ENTRY_OUT:
-                    close_deal = deal
-                    break
-
-            if close_deal is None:
-                print(f"MONITOR: no DEAL_ENTRY_OUT found for ticket={deal_ticket}")
-                continue
-
-            close_price = close_deal.price
-            pnl = close_deal.profit
-            result = "TP" if pnl > 0 else "SL" if pnl < 0 else "BE"
-            print(f"MONITOR: updating ticket={deal_ticket} close_price={close_price} pnl={pnl} result={result}")
-
-            conn = _get_db()
-            try:
-                conn.execute(
-                    """
-                    UPDATE trades 
-                    SET status = 'Closed', closed_at = ?, close_price = ?, pnl = ?, result = ?
-                    WHERE ticket = ? AND status='Executed'
-                    """,
-                    (datetime.now().isoformat(), close_price, pnl, result, deal_ticket),
-                )
-                conn.commit()
-                print(f"MONITOR: updated ticket={deal_ticket} successfully")
-            finally:
-                conn.close()
-
-            if pnl < 0:
-                notify(f"🛑 <b>Stop Loss Hit</b>\nTicket: {deal_ticket}\nLoss: {pnl:.2f}\nClose: {close_price}")
-            elif pnl > 0:
-                notify(f"🎯 <b>Take Profit Hit</b>\nTicket: {deal_ticket}\nProfit: +{pnl:.2f}\nClose: {close_price}")
-            else:
-                notify(f"➖ <b>Break Even</b>\nTicket: {deal_ticket}\nPnL: {pnl:.2f}\nClose: {close_price}")
-        except Exception:
-            pass
+        _reconcile_mt5_history()
+    except Exception as e:
+        add_log("error", f"[MONITOR] History reconciliation failed: {e}")
 
     return jsonify({"status": "ok"})
+
+
+def _reconcile_mt5_history():
+    MAGIC = 123456
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    from_date = now - timedelta(days=30)
+
+    deals = mt5.history_deals_get(from_date, now)
+    if deals is None:
+        add_log("info", "[MONITOR] No history deals found")
+        return
+
+    bot_deals = [d for d in deals if getattr(d, 'magic', 0) == MAGIC]
+    if not bot_deals:
+        add_log("info", "[MONITOR] No bot deals in history")
+        return
+
+    entry_deals = {}
+    exit_deals = {}
+    for d in bot_deals:
+        pos_id = getattr(d, 'position_id', 0)
+        if getattr(d, 'entry', 0) == mt5.DEAL_ENTRY_IN:
+            entry_deals[pos_id] = d
+        elif getattr(d, 'entry', 0) == mt5.DEAL_ENTRY_OUT:
+            exit_deals[pos_id] = d
+
+    conn = _get_db()
+    try:
+        for pos_id, exit_deal in exit_deals.items():
+            entry_deal = entry_deals.get(pos_id)
+            if entry_deal is None:
+                continue
+
+            trade_id = f"{getattr(entry_deal, 'symbol', '')}_{getattr(entry_deal, 'time', 0)}_UNKNOWN"
+            existing = conn.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,)).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE trades SET status = 'Closed', closed_at = ?, close_price = ?, pnl = ?, result = ?, ticket = ?, position_ticket = ?
+                    WHERE trade_id = ? AND status != 'Closed'
+                    """,
+                    (
+                        datetime.fromtimestamp(getattr(exit_deal, 'time', 0)).isoformat(),
+                        getattr(exit_deal, 'price', 0),
+                        getattr(exit_deal, 'profit', 0),
+                        "MT5_History",
+                        getattr(exit_deal, 'ticket', 0),
+                        pos_id,
+                        trade_id,
+                    ),
+                )
+                add_log("info", f"[MONITOR] Updated closed trade trade_id={trade_id} pnl={getattr(exit_deal, 'profit', 0)}")
+                continue
+
+            conn.execute(
+                """
+                INSERT INTO trades (trade_id, time, symbol, direction, lot, entry, sl, tp, status, ticket, position_ticket, close_price, pnl, result, created_at, closed_at, execution_stage)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_id) DO UPDATE SET status = excluded.status, close_price = excluded.close_price, pnl = excluded.pnl, result = excluded.result, ticket = excluded.ticket, position_ticket = excluded.position_ticket, closed_at = excluded.closed_at
+                """,
+                (
+                    trade_id,
+                    datetime.fromtimestamp(getattr(entry_deal, 'time', 0)).isoformat(),
+                    getattr(entry_deal, 'symbol', ''),
+                    "BUY" if getattr(entry_deal, 'type', 0) == mt5.DEAL_TYPE_BUY else "SELL",
+                    getattr(entry_deal, 'volume', 0),
+                    getattr(entry_deal, 'price', 0),
+                    0, 0,
+                    'Closed',
+                    getattr(exit_deal, 'ticket', 0),
+                    pos_id,
+                    getattr(entry_deal, 'price', 0),
+                    getattr(exit_deal, 'profit', 0),
+                    "MT5_History",
+                    datetime.fromtimestamp(getattr(entry_deal, 'time', 0)).isoformat(),
+                    datetime.fromtimestamp(getattr(exit_deal, 'time', 0)).isoformat(),
+                    "reconciled",
+                ),
+            )
+            add_log("info", f"[MONITOR] Reconciled closed trade trade_id={trade_id} symbol={getattr(entry_deal, 'symbol', '')} pnl={getattr(exit_deal, 'profit', 0)}")
+
+        for pos_id, entry_deal in entry_deals.items():
+            if pos_id in exit_deals:
+                continue
+            trade_id = f"{getattr(entry_deal, 'symbol', '')}_{getattr(entry_deal, 'time', 0)}_UNKNOWN"
+            existing = conn.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,)).fetchone()
+            if existing:
+                continue
+            conn.execute(
+                """
+                INSERT INTO trades (trade_id, time, symbol, direction, lot, entry, sl, tp, status, ticket, position_ticket, created_at, execution_stage)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_id) DO UPDATE SET status = excluded.status, ticket = excluded.ticket, position_ticket = excluded.position_ticket
+                """,
+                (
+                    trade_id,
+                    datetime.fromtimestamp(getattr(entry_deal, 'time', 0)).isoformat(),
+                    getattr(entry_deal, 'symbol', ''),
+                    "BUY" if getattr(entry_deal, 'type', 0) == mt5.DEAL_TYPE_BUY else "SELL",
+                    getattr(entry_deal, 'volume', 0),
+                    getattr(entry_deal, 'price', 0),
+                    0, 0,
+                    'Executed',
+                    getattr(entry_deal, 'ticket', 0),
+                    pos_id,
+                    datetime.fromtimestamp(getattr(entry_deal, 'time', 0)).isoformat(),
+                    "reconciled",
+                ),
+            )
+            add_log("info", f"[MONITOR] Reconciled open trade trade_id={trade_id} symbol={getattr(entry_deal, 'symbol', '')}")
+
+        conn.commit()
+    finally:
+        conn.close()
 
 
 @app.route("/api/preview_trade", methods=["POST"])

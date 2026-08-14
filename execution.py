@@ -136,8 +136,8 @@ def execute_sell(symbol, lot, sl, tp, comment=""):
 
 
 class _CloseResult:
-    __slots__ = ("retcode", "comment", "order", "deal", "already_closed", "verified_closed", "volume")
-    def __init__(self, retcode=0, comment="", order=0, deal=0, already_closed=False, verified_closed=False, volume=0.0):
+    __slots__ = ("retcode", "comment", "order", "deal", "already_closed", "verified_closed", "volume", "symbol", "direction", "close_price")
+    def __init__(self, retcode=0, comment="", order=0, deal=0, already_closed=False, verified_closed=False, volume=0.0, symbol="", direction="", close_price=0.0):
         self.retcode = retcode
         self.comment = comment
         self.order = order
@@ -145,6 +145,9 @@ class _CloseResult:
         self.already_closed = already_closed
         self.verified_closed = verified_closed
         self.volume = volume
+        self.symbol = symbol
+        self.direction = direction
+        self.close_price = close_price
 
 def close_position(position_ticket):
     if mt5 is None:
@@ -169,9 +172,11 @@ def close_position(position_ticket):
     if pos.type == _ORDER_TYPE_BUY:
         price = tick.bid
         order_type = _ORDER_TYPE_SELL
+        direction = "BUY"
     else:
         price = tick.ask
         order_type = _ORDER_TYPE_BUY
+        direction = "SELL"
 
     logger.info(f"[CLOSE_ATTEMPT] ticket={position_ticket} symbol={symbol} type={order_type} volume={volume} price={price}")
 
@@ -208,21 +213,29 @@ def close_position(position_ticket):
             result.verified_closed = True
             result.already_closed = False
             result.volume = volume
+            result.symbol = symbol
+            result.direction = direction
+            result.close_price = price
             return result
-        return _CloseResult(retcode=_TRADE_RETCODE_DONE, comment="Position closed (verified)", order=0, deal=0, verified_closed=True, volume=volume)
+        return _CloseResult(retcode=_TRADE_RETCODE_DONE, comment="Position closed (verified)", order=0, deal=0, verified_closed=True, volume=volume, symbol=symbol, direction=direction, close_price=price)
 
     if result is not None and result.retcode == _TRADE_RETCODE_DONE:
         logger.info(f"[FINAL_CLOSE_STATE] CLOSED ticket={position_ticket} symbol={symbol}")
         result.verified_closed = True
         result.already_closed = False
         result.volume = volume
+        result.symbol = symbol
+        result.direction = direction
+        result.close_price = price
         return result
 
     logger.error(f"[FINAL_CLOSE_STATE] FAILED ticket={position_ticket} symbol={symbol} retcode={result.retcode if result else 0} comment={result.comment if result else 'Unknown'}")
     if result is not None:
         result.verified_closed = False
+        result.symbol = symbol
+        result.direction = direction
     if result is None:
-        result = _CloseResult(retcode=0, comment="Order send failed", volume=volume)
+        result = _CloseResult(retcode=0, comment="Order send failed", volume=volume, symbol=symbol, direction=direction)
     return result
 
 

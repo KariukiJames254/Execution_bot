@@ -51,20 +51,23 @@ class ClosePositionTests(unittest.TestCase):
         class FakePos:
             def __init__(self):
                 self.ticket = 12345
-        ui_module.ensure_connected = lambda: True
-        ui_module.get_open_positions = lambda symbol=None: [FakePos()]
-        ui_module.close_position = lambda ticket: None
 
-        response = self.client.post("/api/close_position", json={"ticket": 12345})
-        self.assertEqual(response.status_code, 202)
-        payload = response.get_json()
-        self.assertEqual(payload["status"], "queued_for_ea")
-        self.assertIsNotNone(ui_module.ea_state.get("close_request"))
+        with patch.object(ui_module, "mt5") as mock_mt5:
+            mock_mt5.positions_get.return_value = [FakePos()]
+            ui_module.ensure_connected = lambda: True
+            ui_module.close_position = lambda ticket: None
+
+            response = self.client.post("/api/close_position", json={"ticket": 12345})
+            self.assertEqual(response.status_code, 202)
+            payload = response.get_json()
+            self.assertEqual(payload["status"], "queued_for_ea")
+            self.assertIsNotNone(ui_module.ea_state.get("close_request"))
 
     def test_close_position_success_via_direct(self):
         class FakePos:
             def __init__(self):
                 self.ticket = 12345
+
         mock_result = MagicMock()
         mock_result.retcode = 10009
         mock_result.comment = "Success"
@@ -73,16 +76,20 @@ class ClosePositionTests(unittest.TestCase):
         mock_result.verified_closed = True
         mock_result.already_closed = False
         mock_result.volume = 0.1
+        mock_result.symbol = "EURUSD"
+        mock_result.direction = "BUY"
+        mock_result.close_price = 1.1000
 
-        ui_module.ensure_connected = lambda: True
-        ui_module.get_open_positions = lambda symbol=None: [FakePos()]
-        ui_module.close_position = lambda ticket: mock_result
-        ui_module._update_trade_closed = MagicMock()
+        with patch.object(ui_module, "mt5") as mock_mt5:
+            mock_mt5.positions_get.return_value = [FakePos()]
+            ui_module.ensure_connected = lambda: True
+            ui_module.close_position = lambda ticket: mock_result
+            ui_module._update_trade_closed = MagicMock()
 
-        response = self.client.post("/api/close_position", json={"ticket": 12345})
-        self.assertEqual(response.status_code, 200)
-        payload = response.get_json()
-        self.assertEqual(payload["status"], "closed")
+            response = self.client.post("/api/close_position", json={"ticket": 12345})
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["status"], "closed")
 
     def test_ea_report_close_handles_statuses(self):
         with patch("ui.notify") as mock_notify, patch.object(ui_module, "_update_trade_closed") as mock_closed, patch.object(ui_module, "_update_trade_failed") as mock_failed:
