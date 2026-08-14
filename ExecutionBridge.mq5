@@ -36,6 +36,7 @@ TradeState currentState = STATE_IDLE;
 string pendingTradeId = "";
 string pendingDirection = "";
 string pendingSymbol = "";
+string eaSymbol = "";
 datetime candleCloseTime = 0;
 string armedSymbol = "";
 int armedTfMinutes = 15;
@@ -68,6 +69,18 @@ string lastMarketReport = "";
 void Log(string msg)
 {
     Print("[ExecutionBridge] ", msg);
+}
+
+void LogStateTransition(string tradeId, string oldState, string newState, string reason)
+{
+    Log("=== STATE TRANSITION ===" +
+        " TradeID=" + tradeId +
+        " Previous=" + oldState +
+        " New=" + newState +
+        " Reason=" + reason +
+        " Time=" + TimeToString(TimeGMT(), TIME_DATE|TIME_SECONDS) +
+        " CandleClose=" + (candleCloseTime > 0 ? TimeToString((datetime)candleCloseTime, TIME_DATE|TIME_SECONDS) : "N/A") +
+        " Current=" + TimeToString(TimeGMT(), TIME_DATE|TIME_SECONDS));
 }
 
 ENUM_TIMEFRAMES _PeriodToTf(int tf_minutes)
@@ -186,7 +199,6 @@ void _cleanupTrade()
     lastExecutionDeal  = 0;
     Comment("");
 }
-
 void LogTimeDiagnostics(string symbol, ENUM_TIMEFRAMES tf)
 {
     if(symbol == "" || tf == 0) return;
@@ -408,7 +420,10 @@ void OnTimer()
 
         // Transition terminal states to cleanup
         if(currentState == STATE_ERROR || currentState == STATE_CANCELLED)
+        {
+            LogStateTransition(trackedTradeId, currentState == STATE_ERROR ? "ERROR" : "CANCELLED", "DONE", "cleanup");
             currentState = STATE_DONE;
+        }
 
         if(currentState == STATE_DONE)
         {
@@ -445,7 +460,7 @@ void OnTimer()
     }
 
     // IDLE state: poll Flask for armed trades
-    string eaSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
+    eaSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
     string url = FlaskURL + "/api/ea/pending?symbol=" + eaSymbol + "&trade_id=" + UrlEncode(trackedTradeId);
     string response;
     bool ok = SendGetRequest(url, response);
@@ -625,6 +640,7 @@ void OnTimer()
 
         EnsureSymbol(armedSymbol);
 
+        LogStateTransition(trackedTradeId, "IDLE", "ARMED", "candle_armed");
         Log("======================================");
         Log("TRADE ARMED — all params pre-loaded");
         Log("Direction: " + direction);
@@ -701,6 +717,15 @@ void ExecuteTradeLocal()
     if(currentState == STATE_EXECUTION_IN_PROGRESS)
     {
         Log("ExecuteTradeLocal: DUPLICATE PREVENTED tradeId=" + pendingTradeId + " — execution already in progress");
+        return;
+    }
+
+    if(PositionExistsForTrade(pendingTradeId, pendingSymbol, pendingDirection, pendingLot))
+    {
+        Log("ExecuteTradeLocal: POSITION ALREADY EXISTS tradeId=" + pendingTradeId + " — skipping duplicate execution");
+        ReportExecutionDetailed(pendingTradeId, "executed", 10009, "Position already exists", 0, 0, 0, 0, 0);
+        currentState = STATE_EXECUTED;
+        LogStateTransition(pendingTradeId, "ARMED", "EXECUTED", "position_already_exists");
         return;
     }
 
@@ -944,6 +969,7 @@ void ExecuteTradeLocal()
     executionRequestId = pendingTradeId + "_" + (string)TimeCurrent();
     executionStartTime = TimeCurrent();
     currentState = STATE_EXECUTION_IN_PROGRESS;
+    LogStateTransition(pendingTradeId, "ARMED", "EXECUTION_IN_PROGRESS", "candle_closed_or_bar_changed");
 
     int sendAttempts = 0;
     int maxAttempts = 3;
@@ -1032,6 +1058,7 @@ void ExecuteTradeLocal()
         ReportExecutionDetailed(pendingTradeId, "executed", lastRetcode, "OK",
                                 (long)lastOrder, (long)lastDeal, execEntry, slippage, spread);
         currentState = STATE_EXECUTED;
+        LogStateTransition(pendingTradeId, "EXECUTION_IN_PROGRESS", "EXECUTED", "order_send_done");
         Comment("EXECUTED\n" + commentStr + "\nEntry=" + DoubleToString(execEntry, (int)digits)
                 + "\nSlippage=" + DoubleToString(slippage, (int)digits));
     }
@@ -1040,6 +1067,7 @@ void ExecuteTradeLocal()
         ReportExecutionDetailed(pendingTradeId, "error", lastRetcode, lastComment,
                                 (long)lastOrder, (long)lastDeal, execEntry, slippage, spread);
         currentState = STATE_ERROR;
+        LogStateTransition(pendingTradeId, "EXECUTION_IN_PROGRESS", "ERROR", "order_send_failed");
         Comment("FAILED\n" + lastComment);
     }
 }
@@ -1060,7 +1088,7 @@ void ClosePositionByTicket(long ticket, string symbol)
         Log("[CLOSE_REQUEST] ALREADY_CLOSED ticket=" + (string)ticket + " symbol=" + symbol + " - position not found");
         string payload = StringFormat(
             "{\"ticket\":%lld,\"symbol\":\"%s\",\"status\":\"already_closed\"}",
-            (long long)ticket, symbol
+            (long)ticket, symbol
         );
         string response;
         SendPostRequest(FlaskURL + "/api/ea/report_close", payload, response);
@@ -1174,7 +1202,7 @@ void ClosePositionByTicket(long ticket, string symbol)
 
     string payload = StringFormat(
         "{\"ticket\":%lld,\"symbol\":\"%s\",\"status\":\"%s\",\"price\":%.5f,\"pnl\":%.2f,\"retcode\":%d,\"comment\":\"%s\",\"order\":%lld,\"deal\":%lld,\"volume\":%.2f,\"direction\":\"%s\"}",
-        (long long)posTicket, symbol, finalStatus, closePrice, pnl, retcode, retcodeDesc, (long long)orderTicket, (long long)dealTicket, posVolume, (posType == POSITION_TYPE_BUY ? "BUY" : "SELL")
+        (long)posTicket, symbol, finalStatus, closePrice, pnl, retcode, retcodeDesc, (long)orderTicket, (long)dealTicket, posVolume, (posType == POSITION_TYPE_BUY ? "BUY" : "SELL")
     );
     string response;
     SendPostRequest(FlaskURL + "/api/ea/report_close", payload, response);
@@ -1308,7 +1336,7 @@ void ReportExecutionDetailed(string tradeId, string status, int retcode, string 
         "{\"trade_id\":\"%s\",\"status\":\"%s\",\"ticket\":%lld,\"deal\":%lld,"
         "\"entry\":%.8f,\"slippage\":%.8f,\"spread\":%.8f,\"retcode\":%d,"
         "\"comment\":\"%s\",\"volume\":%.2f,\"symbol\":\"%s\",\"direction\":\"%s\"}",
-        tradeId, status, (long long)ticket, (long long)deal, entry, slippage, spread, retcode, comment,
+        tradeId, status, (long)ticket, (long)deal, entry, slippage, spread, retcode, comment,
         volume, execSymbol, direction
     );
 
