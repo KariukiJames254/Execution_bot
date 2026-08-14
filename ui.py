@@ -1640,13 +1640,19 @@ def api_ea_report_execution():
             if not confirmed:
                 add_log("info", f"[TradeLifecycle][EXECUTING] trade_id={trade_id} symbol={symbol} waiting_for_position_confirmation")
         elif status == "error":
-            _transition_state(trade, TRADE_STATE_FAILED, reason=f"ea_reported_error retcode={retcode} comment={comment}")
-            trade["error"] = comment
-            trade["error_code"] = retcode
-            trade["execution_stage"] = "ea_report"
-            trade["executed_at"] = datetime.now(timezone.utc).isoformat()
-            add_log("error", f"EA execution failed: retcode={retcode}, comment={comment}")
-            _notify_execution_failed(trade, retcode, comment, stage="ea_report")
+            symbol = trade.get("symbol", _current_symbol())
+            lot = trade.get("lot", 0)
+            confirmed = _try_confirm_and_open(trade, symbol, lot)
+            if confirmed:
+                add_log("success", f"[TradeLifecycle][ERROR_RECOVERED] trade_id={trade_id} position confirmed despite error report, transitioning to OPEN")
+            else:
+                _transition_state(trade, TRADE_STATE_FAILED, reason=f"ea_reported_error retcode={retcode} comment={comment}")
+                trade["error"] = comment
+                trade["error_code"] = retcode
+                trade["execution_stage"] = "ea_report"
+                trade["executed_at"] = datetime.now(timezone.utc).isoformat()
+                add_log("error", f"EA execution failed: retcode={retcode}, comment={comment}")
+                _notify_execution_failed(trade, retcode, comment, stage="ea_report")
         elif status == "cancelled":
             _transition_state(trade, TRADE_STATE_CANCELLED, reason="ea_reported_cancelled")
         elif status == "stale_bar":
