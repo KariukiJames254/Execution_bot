@@ -303,6 +303,30 @@ def _try_confirm_and_open(trade, symbol, lot):
     return False
 
 
+def _reconcile_close_state():
+    """Verify close requests against actual MT5 position state."""
+    close_req = ea_state.get("close_request")
+    if not close_req:
+        return
+    
+    ticket = close_req.get("ticket")
+    symbol = close_req.get("symbol")
+    if not ticket or not symbol:
+        return
+    
+    if mt5 is None:
+        return
+    
+    try:
+        positions = mt5.positions_get(ticket=ticket)
+        if positions is None or len(positions) == 0:
+            add_log("success", f"[CLOSE_RECONCILE] Position gone ticket={ticket} - marking closed")
+            ea_state.pop("close_request", None)
+            _update_trade_closed(ticket)
+    except Exception:
+        pass
+
+
 def _confirm_executing_trades():
     """Background check: confirm any EXECUTING/ARMED trades that have since opened."""
     for tid, trade in list(pending_trades.items()):
@@ -1116,6 +1140,7 @@ def api_symbols():
 def api_status():
     _sync_pending_trades_from_disk()
     _confirm_executing_trades()
+    _reconcile_close_state()
     current = _current_symbol()
     connected = _ea_connected()
     account = ea_state.get("account") or None
@@ -1422,7 +1447,7 @@ def api_ea_pending():
     
     add_log("info", f"[TradeLifecycle][EA_PENDING_REQUEST] symbol={symbol} requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} matching_trade_id={matching_trade_id or 'none'} response_status={response_status}")
     
-    close_req = ea_state.pop("close_request", None)
+    close_req = ea_state.get("close_request")
     
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]
@@ -1470,7 +1495,7 @@ def api_ea_pending():
     
     add_log("info", f"[TradeLifecycle][EA_PENDING_REQUEST] symbol={symbol} requested_trade_id={trade_id or 'none'} pending_count={len(pending_ids)} matching_trade_id={matching_trade_id or 'none'} response_status={response_status}")
     
-    close_req = ea_state.pop("close_request", None)
+    close_req = ea_state.get("close_request")
     
     if trade_id and trade_id in pending_trades:
         trade = pending_trades[trade_id]

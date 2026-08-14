@@ -854,15 +854,25 @@ function closePosition(ticket) {
     } else if (data.status === 'already_processing') {
       updateStatus('Close already in progress for ' + ticket + '.');
     } else if (data.status === 'queued_for_ea') {
-      updateStatus('Close request sent for ' + ticket + '. Waiting for EA confirmation...');
+      updateStatus('Close request sent for ' + ticket + '. Waiting for confirmation...');
       var pollCount = 0;
+      var maxPolls = 60;
       var pollInterval = setInterval(function() {
         pollCount++;
         refreshData();
+        var positions = window.currentPositions || [];
+        var posStillExists = positions.some(function(p) { return p.ticket == ticket; });
         var closeReq = document.querySelector('[data-close-ticket="' + ticket + '"]');
-        if (pollCount > 20) {
+        if (!posStillExists) {
           clearInterval(pollInterval);
-          updateStatus('Close request timeout. Check EA logs.');
+          updateStatus('Position ' + ticket + ' closed.');
+          return;
+        }
+        if (pollCount > maxPolls) {
+          clearInterval(pollInterval);
+          if (posStillExists) {
+            updateStatus('Close pending. Position ' + ticket + ' is still open. Check EA logs.');
+          }
         }
       }, 1000);
     } else {
@@ -1027,6 +1037,7 @@ function refreshData() {
   .then(function(r) { return r.json(); })
   .then(function(data) {
     var positions = data.positions || [];
+    window.currentPositions = positions;
     var total = data.total_profit || 0;
     var pnlEl = document.getElementById('total_pnl');
     if (pnlEl) {
