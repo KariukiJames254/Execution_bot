@@ -264,6 +264,8 @@ void OnDeinit(const int reason)
 
 void OnTimer()
 {
+    Log("[ONTIMER] state=" + (string)currentState + " trackedTradeId=" + trackedTradeId + " pendingTradeId=" + pendingTradeId);
+
     ReportMarket();
 
     // Symbol info: every 2 seconds when EA is connected/idle or armed (needed for preflight)
@@ -312,6 +314,7 @@ void OnTimer()
     // Post-execution / error / cancelled states
     if(currentState != STATE_IDLE && currentState != STATE_ARMED)
     {
+        Log("[ONTIMER] state=" + (string)currentState + " — post-execution path, returning early");
         ReportPosition();
 
         // Break-even check (only after successful execution)
@@ -464,6 +467,7 @@ void OnTimer()
     string url = FlaskURL + "/api/ea/pending?symbol=" + eaSymbol + "&trade_id=" + UrlEncode(trackedTradeId);
     string response;
     bool ok = SendGetRequest(url, response);
+    Log("[ONTIMER] state=" + (string)currentState + " poll_ok=" + (string)ok + " response_len=" + (string)StringLen(response));
 
     if(!ok)
     {
@@ -655,6 +659,14 @@ void OnTimer()
         datetime currentBarTime = iTime(armedSymbol, _PeriodToTf(armedTfMinutes), 0);
         bool barChanged  = (currentBarTime != armedBarTime);
         bool timeReached = (now >= candleCloseTime);
+
+        Log("[ONTIMER] ARMED_CHECK tradeId=" + trackedTradeId +
+            " now=" + TimeToString(now, TIME_DATE|TIME_SECONDS) +
+            " close=" + TimeToString(candleCloseTime, TIME_DATE|TIME_SECONDS) +
+            " timeReached=" + (string)timeReached +
+            " barChanged=" + (string)barChanged +
+            " currentBar=" + TimeToString(currentBarTime) +
+            " armedBar=" + TimeToString(armedBarTime));
 
         long barAgeSeconds = 0;
         if(currentBarTime > 0)
