@@ -3,6 +3,7 @@ import json
 import sqlite3
 import hmac
 import secrets
+import threading
 from flask import Flask, render_template, request, jsonify, redirect, session, url_for
 from datetime import datetime, timedelta, timezone
 from config import SYMBOL, TIMEFRAME, SL_PIPS, DEFAULT_RISK_AMOUNT, RISK_PER_TRADE, RR_RATIO, BE_ENABLED, BE_RR, MAX_OPEN_POSITIONS, MAX_TOTAL_OPEN_RISK, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, FLASK_HOST, FLASK_PORT, MIN_STOP_BUFFER_PIPS, ENFORCE_MIN_STOP, DASHBOARD_USERNAME, DASHBOARD_PASSWORD, DASHBOARD_SECRET_KEY
