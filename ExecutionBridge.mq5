@@ -1269,15 +1269,20 @@ string Trim(string value)
 }
 
 void ReportExecutionDetailed(string tradeId, string status, int retcode, string comment,
-                             long ticket, long deal, double entry, double slippage, double spread)
+                              long ticket, long deal, double entry, double slippage, double spread)
 {
     if(tradeId == "") return;
+
+    string execSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
+    string direction = pendingDirection;
+    double volume = pendingLot;
 
     string payload = StringFormat(
         "{\"trade_id\":\"%s\",\"status\":\"%s\",\"ticket\":%d,\"deal\":%d,"
         "\"entry\":%.8f,\"slippage\":%.8f,\"spread\":%.8f,\"retcode\":%d,"
-        "\"comment\":\"%s\"}",
-        tradeId, status, (int)ticket, (int)deal, entry, slippage, spread, retcode, comment
+        "\"comment\":\"%s\",\"volume\":%.2f,\"symbol\":\"%s\",\"direction\":\"%s\"}",
+        tradeId, status, (int)ticket, (int)deal, entry, slippage, spread, retcode, comment,
+        volume, execSymbol, direction
     );
 
     string response;
