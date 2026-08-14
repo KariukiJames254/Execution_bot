@@ -1145,6 +1145,14 @@ def api_status():
     _sync_pending_trades_from_disk()
     _confirm_executing_trades()
     _reconcile_close_state()
+
+    now_unix = int(datetime.now(timezone.utc).timestamp())
+    for tid, trade in list(pending_trades.items()):
+        if trade.get("status") != TRADE_STATE_ARMED:
+            continue
+        candle_close_unix = _compute_candle_close_unix(trade)
+        if candle_close_unix > 0 and now_unix >= candle_close_unix + 5:
+            add_log("warn", f"[StaleArmedTrade] trade_id={tid} symbol={trade.get('symbol')} candle_close_unix={candle_close_unix} now={now_unix} past={now_unix - candle_close_unix}s state={trade.get('status')}")
     current = _current_symbol()
     connected = _ea_connected()
     account = ea_state.get("account") or None
@@ -2944,10 +2952,108 @@ def api_trade():
         return jsonify({"message": "Error: " + str(e)}), 500
 
 
+def _execute_trade_from_backend(trade, symbol, lot, entry, sl, tp, direction):
+    """Execute a trade from the backend worker. Returns (success, message)."""
+    try:
+        from broker import ensure_connected
+        import MetaTrader5 as mt5
+        if not ensure_connected():
+            return False, "MT5 not connected"
+
+        order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
+        required_margin = mt5.order_calc_margin(order_type, symbol, lot, entry)
+        account = mt5.account_info()
+        if required_margin > account.margin_free:
+            return False, f"Insufficient margin: required={required_margin:.2f} free={account.margin_free:.2f}"
+
+        from execution import execute_buy, execute_sell
+        if direction == "BUY":
+            result = execute_buy(symbol, lot, sl, tp, comment="Backend Execution")
+        else:
+            result = execute_sell(symbol, lot, sl, tp, comment="Backend Execution")
+
+        if result is not None and result.retcode == _TRADE_RETCODE_DONE:
+            return True, f"Order sent successfully ticket={result.order}"
+        else:
+            rc = result.retcode if result else 0
+            comment = result.comment if result else "Order rejected (unknown reason)"
+            return False, f"Order failed retcode={rc} comment={comment}"
+    except Exception as e:
+        return False, f"Exception: {e}"
+
+
+def _execution_worker():
+    """Background worker that monitors ARMED trades and executes them when candle closes."""
+    import threading
+    import time
+    while True:
+        try:
+            now_unix = int(datetime.now(timezone.utc).timestamp())
+            for tid, trade in list(pending_trades.items()):
+                status = trade.get("status")
+                if status != TRADE_STATE_ARMED:
+                    continue
+
+                candle_close_unix = _compute_candle_close_unix(trade)
+                if candle_close_unix <= 0:
+                    add_log("warn", f"[ExecutionWorker] trade_id={tid} invalid candle_close_unix={candle_close_unix}")
+                    continue
+
+                remaining = candle_close_unix - now_unix
+                if remaining > 0:
+                    continue
+
+                add_log("info", f"[ExecutionWorker] CANDLE_EXPIRED trade_id={tid} symbol={trade.get('symbol')} candle_close_unix={candle_close_unix} now={now_unix} past={abs(remaining)}s")
+
+                _transition_state(trade, TRADE_STATE_EXECUTING, reason="candle_closed_backend_worker")
+                trade["execution_started_at"] = datetime.now(timezone.utc).isoformat()
+                _save_pending_trades_to_disk()
+
+                symbol = trade.get("symbol", "")
+                lot = trade.get("lot", 0)
+                entry = trade.get("entry", 0)
+                sl = trade.get("sl", 0)
+                tp = trade.get("tp", 0)
+                direction = trade.get("direction", "")
+
+                if not symbol or lot <= 0:
+                    add_log("error", f"[ExecutionWorker] INVALID_PARAMS trade_id={tid} symbol={symbol} lot={lot}")
+                    _transition_state(trade, TRADE_STATE_FAILED, reason="invalid_params")
+                    continue
+
+                success, message = _execute_trade_from_backend(trade, symbol, lot, entry, sl, tp, direction)
+                add_log("info", f"[ExecutionWorker] EXECUTION_RESULT trade_id={tid} success={success} message={message}")
+
+                if success:
+                    _transition_state(trade, TRADE_STATE_OPEN, reason="backend_execution_confirmed")
+                    trade["opened_at"] = datetime.now(timezone.utc).isoformat()
+                    _save_pending_trades_to_disk()
+                else:
+                    _transition_state(trade, TRADE_STATE_FAILED, reason=f"backend_execution_failed: {message}")
+                    trade["error"] = message
+                    _save_pending_trades_to_disk()
+        except Exception as e:
+            add_log("error", f"[ExecutionWorker] exception={e}")
+        time.sleep(1)
+
+
+_execution_worker_thread = None
+
+
+def _start_execution_worker():
+    global _execution_worker_thread
+    if _execution_worker_thread is not None and _execution_worker_thread.is_alive():
+        return
+    _execution_worker_thread = threading.Thread(target=_execution_worker, daemon=True)
+    _execution_worker_thread.start()
+    add_log("info", "[ExecutionWorker] STARTED")
+
+
 def run_ui(host=None, port=None):
     host = host or FLASK_HOST
     port = port or FLASK_PORT
     add_log("info", f"UI server starting on {host}:{port}...")
+    _start_execution_worker()
     app.run(host=host, port=port, debug=False, use_reloader=False)
 
 
