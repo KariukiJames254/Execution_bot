@@ -1039,6 +1039,8 @@ def _compute_candle_close_unix(trade):
                 ct = ct.replace(tzinfo=timezone.utc)
             close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
             add_log("info", f"[CandleCloseUnix] source=trade_candle_time symbol={symbol} tf={tf} candle_time={candle_time_str} close_unix={close_unix}")
+            while close_unix <= int(datetime.now(timezone.utc).timestamp()):
+                close_unix += tf_seconds
             return close_unix
         except Exception as e:
             add_log("error", f"[CandleCloseUnix] trade_candle exception={e}")
@@ -1050,6 +1052,8 @@ def _compute_candle_close_unix(trade):
             raw_time = ea_candle["time"]
             close_unix = int(float(raw_time)) + tf_seconds
             add_log("info", f"[CandleCloseUnix] source=ea_candle_time symbol={symbol} tf={tf} raw_time={raw_time} tf_seconds={tf_seconds} close_unix={close_unix}")
+            while close_unix <= int(datetime.now(timezone.utc).timestamp()):
+                close_unix += tf_seconds
             return close_unix
     except Exception as e:
         add_log("error", f"[CandleCloseUnix] symbol_store exception={e}")
@@ -1593,8 +1597,8 @@ def api_ea_report_account():
 def api_ea_report_position():
     data = request.get_json(silent=True) or {}
     ticket = data.get("ticket")
-    if ticket is None:
-        return jsonify({"error": "Missing ticket"}), 400
+    if ticket is None or int(ticket) <= 0:
+        return jsonify({"error": "Missing or invalid ticket"}), 400
     ea_state["positions"][str(ticket)] = {
         "ticket": ticket,
         "type": data.get("direction", ""),
@@ -2013,6 +2017,10 @@ def api_close_position():
         return jsonify({"error": "Not connected"}), 400
 
     ticket_int = int(ticket)
+
+    if ticket_int <= 0:
+        add_log("warn", f"[CLOSE_REQUEST] INVALID_TICKET ticket={ticket}")
+        return jsonify({"error": "Invalid ticket"}), 400
 
     if (ea_state.get("close_request") or {}).get("ticket") == ticket_int:
         add_log("warn", f"[CLOSE_REQUEST] DUPLICATE SKIP ticket={ticket}")

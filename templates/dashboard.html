@@ -832,7 +832,10 @@ function cancelTrade(tradeId) {
 }
 
 function closePosition(ticket) {
-  if (!ticket) return;
+  if (!ticket || isNaN(ticket) || parseInt(ticket, 10) <= 0) {
+    updateStatus('Invalid ticket.');
+    return;
+  }
 
   var statusEl = document.getElementById('exec_status');
   if (statusEl) statusEl.textContent = 'Closing position ' + ticket + '...';
