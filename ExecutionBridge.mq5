@@ -776,6 +776,14 @@ void ExecuteTradeLocal()
     lot = MathMax(lot, lotMin);
     lot = MathMin(lot, lotMax);
 
+    Log("=== LOT CALCULATION ===" +
+        " tradeId=" + pendingTradeId +
+        " pendingLot=" + DoubleToString(pendingLot, 2) +
+        " normalizedLot=" + DoubleToString(lot, 2) +
+        " lotMin=" + DoubleToString(lotMin, 2) +
+        " lotMax=" + DoubleToString(lotMax, 2) +
+        " lotStep=" + DoubleToString(lotStep, 2));
+
     double execEntry = (pendingDirection == "BUY") ? tick.ask : tick.bid;
     double reqSl = (pendingManualSl > 0) ? pendingManualSl : pendingSl;
     double reqTp = pendingTp;
@@ -790,34 +798,6 @@ void ExecuteTradeLocal()
         else
         {
             reqTp = NormalizeDouble(execEntry - riskDistance * pendingRrRatio, (int)digits);
-        }
-    }
-
-    if(riskDistance > 0 && pendingRiskAmount > 0)
-    {
-        double tickValue = SymbolInfoDouble(execSymbol, SYMBOL_TRADE_TICK_VALUE);
-        double tickSize = SymbolInfoDouble(execSymbol, SYMBOL_TRADE_TICK_SIZE);
-        double lossPerLot = 0;
-
-        if(tickSize > 0 && tickValue > 0)
-        {
-            double distanceTicks = riskDistance / tickSize;
-            lossPerLot = tickValue * distanceTicks;
-        }
-
-        if(lossPerLot <= 0 && point > 0 && tickValue > 0)
-        {
-            double distancePoints = riskDistance / point;
-            lossPerLot = tickValue * distancePoints;
-        }
-
-        if(lossPerLot > 0)
-        {
-            double calcLot = pendingRiskAmount / lossPerLot;
-            calcLot = MathFloor(calcLot / lotStep) * lotStep;
-            calcLot = MathMax(calcLot, lotMin);
-            calcLot = MathMin(calcLot, lotMax);
-            lot = calcLot;
         }
     }
 
@@ -935,6 +915,40 @@ void ExecuteTradeLocal()
         " deviation=" + (string)request.deviation + " magic=" + (string)request.magic +
         " filling=" + (string)request.type_filling + " type_time=" + (string)request.type_time);
 
+    Log("=== ACCOUNT MARGIN CHECK ===" +
+        " tradeId=" + pendingTradeId +
+        " balance=" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) +
+        " equity=" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) +
+        " margin=" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN), 2) +
+        " free_margin=" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE), 2) +
+        " margin_level=" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), 2) +
+        " volume=" + DoubleToString(lot, 2));
+
+    double requiredMargin = 0;
+    if(OrderCalcMargin(request.type, execSymbol, lot, execEntry, requiredMargin))
+    {
+        double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+        Log("=== MARGIN CHECK ===" +
+            " tradeId=" + pendingTradeId +
+            " required=" + DoubleToString(requiredMargin, 2) +
+            " free=" + DoubleToString(freeMargin, 2) +
+            " sufficient=" + (requiredMargin <= freeMargin ? "YES" : "NO"));
+        
+        if(requiredMargin > freeMargin)
+        {
+            Log("[MARGIN] INSUFFICIENT tradeId=" + pendingTradeId + " required=" + DoubleToString(requiredMargin, 2) + " free=" + DoubleToString(freeMargin, 2));
+            ReportExecutionDetailed(pendingTradeId, "error", 10019, "Insufficient margin: required=" + DoubleToString(requiredMargin, 2) + " free=" + DoubleToString(freeMargin, 2), 0, 0, execEntry, 0, 0);
+            currentState = STATE_ERROR;
+            LogStateTransition(pendingTradeId, "EXECUTION_IN_PROGRESS", "ERROR", "insufficient_margin");
+            Comment("FAILED\nInsufficient margin");
+            return;
+        }
+    }
+    else
+    {
+        Log("[MARGIN] OrderCalcMargin failed tradeId=" + pendingTradeId + " err=" + (string)GetLastError());
+    }
+
     MqlTradeCheckResult check = {};
     if(!OrderCheck(request, check))
     {
@@ -944,6 +958,7 @@ void ExecuteTradeLocal()
             " margin=" + DoubleToString(check.margin, 2) + " free_margin=" + DoubleToString(check.margin_free, 2));
         ReportExecutionDetailed(pendingTradeId, "error", (int)check.retcode, "OrderCheck failed: " + check.comment, 0, 0, execEntry, 0, 0);
         currentState = STATE_ERROR;
+        LogStateTransition(pendingTradeId, "EXECUTION_IN_PROGRESS", "ERROR", "order_check_failed");
         Comment("FAILED\nOrderCheck failed");
         return;
     }
