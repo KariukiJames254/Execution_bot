@@ -713,7 +713,10 @@ def _normalize_trade_id(trade_id):
 
 
 def _current_symbol():
-    return request.headers.get("X-Symbol") or request.args.get("symbol") or SYMBOL
+    try:
+        return request.headers.get("X-Symbol") or request.args.get("symbol") or SYMBOL
+    except RuntimeError:
+        return SYMBOL
 
 
 def _ea_connected():
@@ -2987,6 +2990,7 @@ def _execution_worker():
     """Background worker that monitors ARMED trades and executes them when candle closes."""
     import threading
     import time
+    import traceback
     while True:
         try:
             now_unix = int(datetime.now(timezone.utc).timestamp())
@@ -3022,8 +3026,16 @@ def _execution_worker():
                     _transition_state(trade, TRADE_STATE_FAILED, reason="invalid_params")
                     continue
 
-                success, message = _execute_trade_from_backend(trade, symbol, lot, entry, sl, tp, direction)
-                add_log("info", f"[ExecutionWorker] EXECUTION_RESULT trade_id={tid} success={success} message={message}")
+                try:
+                    success, message = _execute_trade_from_backend(trade, symbol, lot, entry, sl, tp, direction)
+                    add_log("info", f"[ExecutionWorker] EXECUTION_RESULT trade_id={tid} success={success} message={message}")
+                except Exception as exec_err:
+                    add_log("error", f"[ExecutionWorker] EXECUTION_FAILED trade_id={tid} error={exec_err}")
+                    add_log("error", f"[ExecutionWorker] TRACEBACK trade_id={tid} traceback={traceback.format_exc()}")
+                    _transition_state(trade, TRADE_STATE_FAILED, reason=f"backend_execution_exception: {exec_err}")
+                    trade["error"] = str(exec_err)
+                    _save_pending_trades_to_disk()
+                    continue
 
                 if success:
                     _transition_state(trade, TRADE_STATE_OPEN, reason="backend_execution_confirmed")
@@ -3034,7 +3046,11 @@ def _execution_worker():
                     trade["error"] = message
                     _save_pending_trades_to_disk()
         except Exception as e:
-            add_log("error", f"[ExecutionWorker] exception={e}")
+            try:
+                add_log("error", f"[ExecutionWorker] WORKER_EXCEPTION error={e}")
+                add_log("error", f"[ExecutionWorker] WORKER_TRACEBACK traceback={traceback.format_exc()}")
+            except Exception:
+                pass
         time.sleep(1)
 
 
