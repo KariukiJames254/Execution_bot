@@ -130,6 +130,11 @@ def is_active_pending_trade(trade):
 
 
 def _get_open_positions_impl(symbol=None):
+    if _execution_get_open_positions is not None:
+        try:
+            return _execution_get_open_positions(symbol)
+        except Exception:
+            pass
     try:
         from broker import ensure_connected
         import MetaTrader5 as mt5
@@ -149,21 +154,75 @@ def _get_open_positions_impl(symbol=None):
 def _confirm_position(trade, symbol, lot, magic=123456):
     """Confirm that an MT5 position exists for the trade. Returns position dict or None."""
     positions = _get_open_positions_impl(symbol)
+    trade_direction = trade.get("direction", "")
+    trade_ticket = trade.get("ticket")
+    trade_time_str = trade.get("executed_at") or trade.get("created_at")
+    trade_time = None
+    if trade_time_str:
+        try:
+            trade_time = datetime.fromisoformat(trade_time_str)
+        except Exception:
+            pass
+
     for pos in positions:
-        if getattr(pos, 'magic', 0) == magic:
-            pos_lot = getattr(pos, 'volume', 0)
-            pos_ticket = getattr(pos, 'ticket', 0)
-            if abs(pos_lot - lot) < 0.001 or pos_ticket == trade.get("ticket"):
-                return {
-                    "ticket": pos_ticket,
-                    "symbol": getattr(pos, 'symbol', symbol),
-                    "volume": pos_lot,
-                    "price_open": getattr(pos, 'price_open', 0),
-                    "sl": getattr(pos, 'sl', 0),
-                    "tp": getattr(pos, 'tp', 0),
-                    "profit": getattr(pos, 'profit', 0),
-                    "type": getattr(pos, 'type', 0),
-                }
+        pos_magic = getattr(pos, 'magic', 0)
+        if pos_magic != magic:
+            continue
+
+        pos_symbol = getattr(pos, 'symbol', '')
+        if pos_symbol != symbol:
+            continue
+
+        pos_type = getattr(pos, 'type', None)
+        pos_dir = "BUY" if pos_type == 0 else ("SELL" if pos_type == 1 else "")
+        if trade_direction and pos_dir and pos_dir != trade_direction:
+            continue
+
+        pos_lot = getattr(pos, 'volume', 0)
+        pos_ticket = getattr(pos, 'ticket', 0)
+
+        if trade_ticket and pos_ticket == trade_ticket:
+            return {
+                "ticket": pos_ticket,
+                "symbol": pos_symbol,
+                "volume": pos_lot,
+                "price_open": getattr(pos, 'price_open', 0),
+                "sl": getattr(pos, 'sl', 0),
+                "tp": getattr(pos, 'tp', 0),
+                "profit": getattr(pos, 'profit', 0),
+                "type": pos_type,
+            }
+
+        if lot > 0 and abs(pos_lot - lot) / max(lot, 0.01) < 0.15:
+            return {
+                "ticket": pos_ticket,
+                "symbol": pos_symbol,
+                "volume": pos_lot,
+                "price_open": getattr(pos, 'price_open', 0),
+                "sl": getattr(pos, 'sl', 0),
+                "tp": getattr(pos, 'tp', 0),
+                "profit": getattr(pos, 'profit', 0),
+                "type": pos_type,
+            }
+
+        if trade_time:
+            pos_time = getattr(pos, 'time', 0)
+            if isinstance(pos_time, (int, float)) and pos_time > 0:
+                pos_dt = datetime.fromtimestamp(pos_time)
+                if trade_time.tzinfo is not None:
+                    pos_dt = pos_dt.replace(tzinfo=timezone.utc)
+                if abs((pos_dt - trade_time).total_seconds()) < 300:
+                    return {
+                        "ticket": pos_ticket,
+                        "symbol": pos_symbol,
+                        "volume": pos_lot,
+                        "price_open": getattr(pos, 'price_open', 0),
+                        "sl": getattr(pos, 'sl', 0),
+                        "tp": getattr(pos, 'tp', 0),
+                        "profit": getattr(pos, 'profit', 0),
+                        "type": pos_type,
+                    }
+
     return None
 
 
@@ -245,9 +304,10 @@ def _try_confirm_and_open(trade, symbol, lot):
 
 
 def _confirm_executing_trades():
-    """Background check: confirm any EXECUTING trades that have since opened."""
+    """Background check: confirm any EXECUTING/ARMED trades that have since opened."""
     for tid, trade in list(pending_trades.items()):
-        if trade.get("status") != TRADE_STATE_EXECUTING:
+        status = trade.get("status")
+        if status not in (TRADE_STATE_EXECUTING, TRADE_STATE_ARMED):
             continue
         if trade.get("opened_notification_sent"):
             continue
@@ -647,15 +707,6 @@ def is_connected():
 
 def ensure_connected():
     return is_connected()
-
-
-def _get_open_positions_impl(symbol=None):
-    if _execution_get_open_positions is not None:
-        try:
-            return _execution_get_open_positions(symbol)
-        except Exception:
-            pass
-    return []
 
 
 def get_open_positions(symbol=None):
@@ -1618,13 +1669,22 @@ def api_ea_report_execution():
     entry = data.get("entry", 0)
     slippage = data.get("slippage", 0)
     spread = data.get("spread", 0)
+    actual_volume = data.get("volume")
+    actual_symbol = data.get("symbol")
+    actual_direction = data.get("direction")
     
-    add_log("info", f"[TradeLifecycle][EA_REPORT_EXECUTION] trade_id={trade_id} status={status} retcode={retcode} comment={comment} order={order} deal={deal} entry={entry} slippage={slippage} spread={spread}")
+    add_log("info", f"[TradeLifecycle][EA_REPORT_EXECUTION] trade_id={trade_id} status={status} retcode={retcode} comment={comment} order={order} deal={deal} entry={entry} slippage={slippage} spread={spread} volume={actual_volume} symbol={actual_symbol} direction={actual_direction}")
     
     if trade_id in pending_trades:
         trade = pending_trades[trade_id]
         trade.update(data)
         if status == "executed":
+            if actual_volume:
+                trade["lot"] = actual_volume
+            if actual_symbol:
+                trade["symbol"] = actual_symbol
+            if actual_direction:
+                trade["direction"] = actual_direction
             _transition_state(trade, TRADE_STATE_EXECUTING, reason="ea_reported_executed")
             trade["execution_retcode"] = retcode
             trade["execution_comment"] = comment
