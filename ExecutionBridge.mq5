@@ -444,24 +444,22 @@ void OnTimer()
     string targetSymbol = Trim(ExtractJsonValue(response, "target_symbol"));
     string tradeSymbol  = Trim(ExtractJsonValue(response, "symbol"));
 
+    string closeTicketStr = Trim(ExtractJsonValue(response, "close_ticket"));
+    long closeTicket = 0;
+    if(closeTicketStr != "" && closeTicketStr != "0")
+        closeTicket = StringToInteger(closeTicketStr);
+    if(closeTicket > 0)
+    {
+        string closeSymbol = Trim(ExtractJsonValue(response, "close_symbol"));
+        if(closeSymbol == "")
+            closeSymbol = _Symbol;
+        EnsureSymbol(closeSymbol);
+        Log("[CLOSE_REQUEST] RECEIVED ticket=" + (string)closeTicket + " symbol=" + closeSymbol + " tradeId=" + tradeId + " status=" + status);
+        ClosePositionByTicket(closeTicket, closeSymbol);
+    }
+
     if(tradeId == "" || status == "")
     {
-        Log("[TradeLifecycle][EA_PENDING_EMPTY] tradeId=empty status=empty symbol=" + eaSymbol + " trackedTradeId=" + trackedTradeId);
-        // Even if no trade armed, check for close requests
-        string closeTicketStr = Trim(ExtractJsonValue(response, "close_ticket"));
-        long closeTicket = 0;
-        if(closeTicketStr != "" && closeTicketStr != "0")
-            closeTicket = StringToInteger(closeTicketStr);
-        if(closeTicket > 0)
-        {
-            string closeSymbol = Trim(ExtractJsonValue(response, "close_symbol"));
-            if(closeSymbol == "")
-                closeSymbol = _Symbol;
-            EnsureSymbol(closeSymbol);
-            ClosePositionByTicket(closeTicket, closeSymbol);
-        }
-        return;
-    }
 
     if(targetSymbol != "" && targetSymbol != _Symbol)
     {
