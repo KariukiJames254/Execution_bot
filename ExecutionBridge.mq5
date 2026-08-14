@@ -23,12 +23,13 @@ input long   MagicNumber  = 123456;   // Configurable magic number
 input int    Deviation    = 10;       // Slippage in points
 
 enum TradeState {
-   STATE_IDLE,         // Polling Flask for armed trades
-   STATE_ARMED,        // Trade armed, waiting for candle close
-   STATE_EXECUTED,     // OrderSend DONE, monitoring position
-   STATE_CANCELLED,    // Trade was cancelled by Flask
-   STATE_ERROR,        // Execution or connection error
-   STATE_DONE           // Post-execution cleanup
+   STATE_IDLE,              // Polling Flask for armed trades
+   STATE_ARMED,             // Trade armed, waiting for candle close
+   STATE_EXECUTION_IN_PROGRESS, // OrderSend in progress, preventing duplicate
+   STATE_EXECUTED,          // OrderSend DONE, monitoring position
+   STATE_CANCELLED,         // Trade was cancelled by Flask
+   STATE_ERROR,             // Execution or connection error
+   STATE_DONE                // Post-execution cleanup
 };
 TradeState currentState = STATE_IDLE;
 
@@ -56,6 +57,11 @@ double pendingRrRatio = 5.0;
 bool breakEvenApplied = false;
 datetime lastBeAttemptTime = 0;
 long processingCloseTicket = 0;
+
+string executionRequestId = "";
+datetime executionStartTime = 0;
+long lastExecutionOrder = 0;
+long lastExecutionDeal = 0;
 
 string lastMarketReport = "";
 
@@ -93,6 +99,44 @@ bool EnsureSymbol(string symbol)
     long sel = SymbolInfoInteger(symbol, SYMBOL_SELECT);
     if(sel != 0) return true;
     if(SymbolSelect(symbol, true)) return true;
+    return false;
+}
+
+bool PositionExistsForTrade(string tradeId, string symbol, string direction, double expectedVolume)
+{
+    if(!EnsureSymbol(symbol))
+        return false;
+
+    int total = PositionsTotal();
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket))
+            continue;
+
+        string posSymbol = PositionGetString(POSITION_SYMBOL);
+        if(posSymbol != symbol)
+            continue;
+
+        long magic = PositionGetInteger(POSITION_MAGIC);
+        if(magic != MagicNumber)
+            continue;
+
+        long type = PositionGetInteger(POSITION_TYPE);
+        string posDir = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+        if(posDir != direction)
+            continue;
+
+        double volume = PositionGetDouble(POSITION_VOLUME);
+        if(expectedVolume > 0 && MathAbs(volume - expectedVolume) > 0.01)
+            continue;
+
+        Log("[POSITION_LOOKUP] FOUND tradeId=" + tradeId + " ticket=" + (string)ticket + " symbol=" + posSymbol +
+            " type=" + posDir + " volume=" + DoubleToString(volume, 2) + " price_open=" + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), 5));
+        return true;
+    }
+
+    Log("[POSITION_LOOKUP] NOT_FOUND tradeId=" + tradeId + " symbol=" + symbol + " direction=" + direction + " volume=" + DoubleToString(expectedVolume, 2));
     return false;
 }
 
@@ -136,6 +180,10 @@ void _cleanupTrade()
     armedBarTime       = 0;
     armedSymbol        = "";
     armedTfMinutes     = 15;
+    executionRequestId = "";
+    executionStartTime = 0;
+    lastExecutionOrder = 0;
+    lastExecutionDeal  = 0;
     Comment("");
 }
 
@@ -352,7 +400,7 @@ void OnTimer()
         }
 
         // After execution, check if position is still open
-        if(currentState == STATE_EXECUTED)
+        if(currentState == STATE_EXECUTED || currentState == STATE_EXECUTION_IN_PROGRESS)
         {
             if(!PositionSelect(pendingSymbol))
                 currentState = STATE_DONE;
@@ -600,6 +648,11 @@ void OnTimer()
         }
         else if(barChanged || timeReached)
         {
+            if(currentState == STATE_EXECUTION_IN_PROGRESS)
+            {
+                Log("EXECUTE: execution already in progress for tradeId=" + trackedTradeId + " — skipping duplicate trigger");
+                return;
+            }
             Log("EXECUTE: candle closed — executing OrderSend locally");
             ExecuteTradeLocal();
         }
@@ -617,6 +670,12 @@ void ExecuteTradeLocal()
 {
     if(pendingTradeId == "" || pendingSymbol == "")
         return;
+
+    if(currentState == STATE_EXECUTION_IN_PROGRESS)
+    {
+        Log("ExecuteTradeLocal: DUPLICATE PREVENTED tradeId=" + pendingTradeId + " — execution already in progress");
+        return;
+    }
 
     pendingTradeId = Trim(pendingTradeId);
     string execSymbol = (armedSymbol != "" ? armedSymbol : _Symbol);
@@ -818,6 +877,29 @@ void ExecuteTradeLocal()
         " tp=" + DoubleToString(reqTp, (int)digits) + " lot=" + DoubleToString(lot, 2) +
         " manual_sl=" + DoubleToString(pendingManualSl, (int)digits) + " risk=" + DoubleToString(pendingRiskAmount, 2));
 
+    Log("[ORDER_PARAMS] action=" + (string)request.action + " symbol=" + request.symbol + " volume=" + DoubleToString(request.volume, 2) +
+        " type=" + (string)request.type + " price=" + DoubleToString(request.price, (int)digits) +
+        " sl=" + DoubleToString(request.sl, (int)digits) + " tp=" + DoubleToString(request.tp, (int)digits) +
+        " deviation=" + (string)request.deviation + " magic=" + (string)request.magic +
+        " filling=" + (string)request.type_filling + " type_time=" + (string)request.type_time);
+
+    MqlTradeCheck check = {};
+    if(!OrderCheck(request, check))
+    {
+        int checkErr = GetLastError();
+        Log("[ORDER_CHECK] FAILED tradeId=" + pendingTradeId + " err=" + (string)checkErr +
+            " retcode=" + (string)check.retcode + " comment=" + check.comment +
+            " margin=" + DoubleToString(check.margin, 2) + " free_margin=" + DoubleToString(check.margin_free, 2));
+        ReportExecutionDetailed(pendingTradeId, "error", (int)check.retcode, "OrderCheck failed: " + check.comment, 0, 0, execEntry, 0, 0);
+        currentState = STATE_ERROR;
+        Comment("FAILED\nOrderCheck failed");
+        return;
+    }
+
+    Log("[ORDER_CHECK] SUCCESS tradeId=" + pendingTradeId + " retcode=" + (string)check.retcode + " comment=" + check.comment +
+        " margin=" + DoubleToString(check.margin, 2) + " free_margin=" + DoubleToString(check.margin_free, 2) +
+        " balance=" + DoubleToString(check.balance, 2) + " equity=" + DoubleToString(check.equity, 2));
+
     long tradeMode = SymbolInfoInteger(execSymbol, SYMBOL_TRADE_MODE);
     long terminalTradeAllowed = TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
     Log("ExecuteTradeLocal: tradeMode=" + (string)tradeMode + " terminalTradeAllowed=" + (string)terminalTradeAllowed
@@ -831,6 +913,10 @@ void ExecuteTradeLocal()
         Comment("FAILED\nMarket closed");
         return;
     }
+
+    executionRequestId = pendingTradeId + "_" + (string)TimeCurrent();
+    executionStartTime = TimeCurrent();
+    currentState = STATE_EXECUTION_IN_PROGRESS;
 
     int sendAttempts = 0;
     int maxAttempts = 3;
@@ -848,6 +934,7 @@ void ExecuteTradeLocal()
         request.sl = trySl;
         request.tp = tryTp;
 
+        ResetLastError();
         if(OrderSend(request, result))
         {
             orderSuccess = true;
@@ -865,27 +952,38 @@ void ExecuteTradeLocal()
         lastDeal = result.deal;
         sendAttempts++;
 
-        Log("OrderSend FAILED attempt=" + (string)sendAttempts + " err=" + (string)lastErr
-            + " retcode=" + (string)lastRetcode + " comment=" + lastComment
-            + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
+        Log("[ORDER_SEND] FAILED attempt=" + (string)sendAttempts + " tradeId=" + pendingTradeId +
+            " lastErr=" + (string)lastErr + " retcode=" + (string)lastRetcode + " comment=" + lastComment +
+            " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
 
         if(lastErr == 4756 && sendAttempts < maxAttempts)
         {
-            Log("OrderSend 4756 retry " + (string)sendAttempts + "/" + (string)maxAttempts + " keeping original SL/TP");
+            Log("[ORDER_SEND] 4756 retry " + (string)sendAttempts + "/" + (string)maxAttempts + " verifying position before retry...");
+            if(PositionExistsForTrade(pendingTradeId, execSymbol, pendingDirection, lot))
+            {
+                Log("[ORDER_SEND] POSITION ALREADY EXISTS after 4756 — stopping retries, treating as success");
+                orderSuccess = true;
+                lastRetcode = 10009;
+                lastComment = "Position confirmed after 4756";
+                lastOrder = PositionGetInteger(POSITION_TICKET);
+                lastDeal = 0;
+                break;
+            }
             Sleep(500);
             continue;
         }
 
         if(lastErr == TRADE_RETCODE_MARKET_CLOSED || lastRetcode == TRADE_RETCODE_MARKET_CLOSED)
         {
-            Log("ExecuteTradeLocal: MARKET CLOSED (retcode=" + (string)lastRetcode + "). Not retrying.");
+            Log("[ORDER_SEND] MARKET CLOSED retcode=" + (string)lastRetcode + " — not retrying");
             ReportExecutionDetailed(pendingTradeId, "market_closed", (int)TRADE_RETCODE_MARKET_CLOSED, "Market closed", (long)lastOrder, (long)lastDeal, execEntry, slippage, spread);
             currentState = STATE_ERROR;
             Comment("FAILED\nMarket closed");
             return;
         }
 
-        ReportExecutionDetailed(pendingTradeId, "error", lastErr, "OrderSend failed", 0, 0, execEntry, slippage, spread);
+        Log("[ORDER_SEND] NON_4756 ERROR — aborting retries");
+        ReportExecutionDetailed(pendingTradeId, "error", lastErr, "OrderSend failed: " + lastComment, (long)lastOrder, (long)lastDeal, execEntry, slippage, spread);
         currentState = STATE_ERROR;
         Comment("FAILED\nOrderSend failed err=" + (string)lastErr);
         return;
@@ -893,32 +991,22 @@ void ExecuteTradeLocal()
 
     if(!orderSuccess)
     {
-        Log("[TradeLifecycle][EXECUTION_FAILED] tradeId=" + pendingTradeId + " retcode=" + (string)lastRetcode + " comment=" + lastComment + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
-        Log("OrderSend failed after " + (string)maxAttempts + " attempts. Last err=" + (string)lastErr
-            + " retcode=" + (string)lastRetcode + " comment=" + lastComment);
-        ReportExecutionDetailed(pendingTradeId, "error", 4756, "OrderSend failed after retries", 0, 0, execEntry, slippage, spread);
+        Log("[FINAL_EXECUTION_STATE] FAILED tradeId=" + pendingTradeId + " retcode=" + (string)lastRetcode + " comment=" + lastComment + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
+        ReportExecutionDetailed(pendingTradeId, "error", 4756, "OrderSend failed after retries", (long)lastOrder, (long)lastDeal, execEntry, slippage, spread);
         currentState = STATE_ERROR;
         Comment("FAILED\nOrderSend failed after retries");
         return;
     }
 
-    Log("[TradeLifecycle][EXECUTION_SUCCESS] tradeId=" + pendingTradeId + " ticket=" + (string)lastOrder + " deal=" + (string)lastDeal +
-        " entry=" + DoubleToString(execEntry, (int)digits) + " sl=" + DoubleToString(reqSl, (int)digits) +
-        " tp=" + DoubleToString(reqTp, (int)digits) + " volume=" + DoubleToString(lot, 2) +
-        " retcode=" + (string)lastRetcode);
-    
-    Log("OrderSend SUCCESS retcode=" + (string)lastRetcode + " comment=" + lastComment
-        + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
+    Log("[FINAL_EXECUTION_STATE] SUCCESS tradeId=" + pendingTradeId + " retcode=" + (string)lastRetcode + " comment=" + lastComment + " order=" + (string)lastOrder + " deal=" + (string)lastDeal);
 
-    if(lastRetcode == TRADE_RETCODE_DONE)
+    if(lastRetcode == TRADE_RETCODE_DONE || (lastOrder > 0 && PositionExistsForTrade(pendingTradeId, execSymbol, pendingDirection, lot)))
     {
         ReportExecutionDetailed(pendingTradeId, "executed", lastRetcode, "OK",
                                 (long)lastOrder, (long)lastDeal, execEntry, slippage, spread);
         currentState = STATE_EXECUTED;
         Comment("EXECUTED\n" + commentStr + "\nEntry=" + DoubleToString(execEntry, (int)digits)
                 + "\nSlippage=" + DoubleToString(slippage, (int)digits));
-
-        // Detect position on next timer tick, not now
     }
     else
     {
