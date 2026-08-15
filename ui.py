@@ -695,6 +695,7 @@ def _transition_state(trade, new_state, reason=""):
         history.pop("candle_close", None)
         _save_trade_history_entry(history)
     _save_pending_trades_to_disk()
+    add_log("info", f"[TradeState] SAVED trade_id={trade.get('trade_id')} new_status={trade.get('status')}")
 
 
 def _normalize_trade_id(trade_id):
@@ -1043,8 +1044,6 @@ def _compute_candle_close_unix(trade):
                 ct = ct.replace(tzinfo=timezone.utc)
             close_unix = int((ct + timedelta(seconds=tf_seconds)).timestamp())
             add_log("info", f"[CandleCloseUnix] source=trade_candle_time symbol={symbol} tf={tf} candle_time={candle_time_str} close_unix={close_unix}")
-            while close_unix <= int(datetime.now(timezone.utc).timestamp()):
-                close_unix += tf_seconds
             return close_unix
         except Exception as e:
             add_log("error", f"[CandleCloseUnix] trade_candle exception={e}")
@@ -1056,8 +1055,6 @@ def _compute_candle_close_unix(trade):
             raw_time = ea_candle["time"]
             close_unix = int(float(raw_time)) + tf_seconds
             add_log("info", f"[CandleCloseUnix] source=ea_candle_time symbol={symbol} tf={tf} raw_time={raw_time} tf_seconds={tf_seconds} close_unix={close_unix}")
-            while close_unix <= int(datetime.now(timezone.utc).timestamp()):
-                close_unix += tf_seconds
             return close_unix
     except Exception as e:
         add_log("error", f"[CandleCloseUnix] symbol_store exception={e}")
@@ -2958,24 +2955,31 @@ def api_trade():
 
 def _execute_trade_from_backend(trade, symbol, lot, entry, sl, tp, direction):
     """Execute a trade from the backend worker. Returns (success, message)."""
+    add_log("info", f"[ExecuteBackend] START trade_id={trade.get('trade_id')} symbol={symbol} lot={lot} direction={direction}")
     try:
+        add_log("info", "[ExecuteBackend] CHECKING_MT5_CONNECTION")
         from broker import ensure_connected
-        import MetaTrader5 as mt5
         if not ensure_connected():
+            add_log("error", "[ExecuteBackend] MT5_NOT_CONNECTED")
             return False, "MT5 not connected"
 
+        add_log("info", "[ExecuteBackend] CALCULATING_MARGIN")
+        import MetaTrader5 as mt5
         order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
         required_margin = mt5.order_calc_margin(order_type, symbol, lot, entry)
         account = mt5.account_info()
         if required_margin > account.margin_free:
+            add_log("error", f"[ExecuteBackend] INSUFFICIENT_MARGIN required={required_margin:.2f} free={account.margin_free:.2f}")
             return False, f"Insufficient margin: required={required_margin:.2f} free={account.margin_free:.2f}"
 
+        add_log("info", "[ExecuteBackend] CALLING_EXECUTE_BUY_SELL")
         from execution import execute_buy, execute_sell
         if direction == "BUY":
             result = execute_buy(symbol, lot, sl, tp, comment="Backend Execution")
         else:
             result = execute_sell(symbol, lot, sl, tp, comment="Backend Execution")
 
+        add_log("info", f"[ExecuteBackend] RESULT retcode={result.retcode if result else None} comment={result.comment if result else None}")
         if result is not None and result.retcode == _TRADE_RETCODE_DONE:
             return True, f"Order sent successfully ticket={result.order}"
         else:
@@ -2983,6 +2987,8 @@ def _execute_trade_from_backend(trade, symbol, lot, entry, sl, tp, direction):
             comment = result.comment if result else "Order rejected (unknown reason)"
             return False, f"Order failed retcode={rc} comment={comment}"
     except Exception as e:
+        add_log("error", f"[ExecuteBackend] EXCEPTION error={e}")
+        add_log("error", f"[ExecuteBackend] TRACEBACK traceback={traceback.format_exc()}")
         return False, f"Exception: {e}"
 
 
@@ -2991,26 +2997,33 @@ def _execution_worker():
     import threading
     import time
     import traceback
+    add_log("info", "[ExecutionWorker] INITIALIZING")
     while True:
         try:
             now_unix = int(datetime.now(timezone.utc).timestamp())
+            add_log("info", f"[ExecutionWorker] LOOP_START now_unix={now_unix} pending_count={len(pending_trades)}")
             for tid, trade in list(pending_trades.items()):
                 status = trade.get("status")
+                symbol = trade.get("symbol", "")
+                candle_close_unix = _compute_candle_close_unix(trade)
+                remaining = candle_close_unix - now_unix if candle_close_unix > 0 else -1
+                add_log("info", f"[ExecutionWorker] CHECK trade_id={tid} status={status} symbol={symbol} candle_close_unix={candle_close_unix} now={now_unix} remaining={remaining}")
+
                 if status != TRADE_STATE_ARMED:
                     continue
 
-                candle_close_unix = _compute_candle_close_unix(trade)
                 if candle_close_unix <= 0:
                     add_log("warn", f"[ExecutionWorker] trade_id={tid} invalid candle_close_unix={candle_close_unix}")
                     continue
 
-                remaining = candle_close_unix - now_unix
                 if remaining > 0:
                     continue
 
-                add_log("info", f"[ExecutionWorker] CANDLE_EXPIRED trade_id={tid} symbol={trade.get('symbol')} candle_close_unix={candle_close_unix} now={now_unix} past={abs(remaining)}s")
+                add_log("info", f"[ExecutionWorker] CANDLE_EXPIRED trade_id={tid} symbol={symbol} candle_close_unix={candle_close_unix} now={now_unix} past={abs(remaining)}s")
 
+                old_state = trade.get("status", "unknown")
                 _transition_state(trade, TRADE_STATE_EXECUTING, reason="candle_closed_backend_worker")
+                add_log("info", f"[ExecutionWorker] STATE_TRANSITIONED trade_id={tid} from={old_state} to={trade.get('status')}")
                 trade["execution_started_at"] = datetime.now(timezone.utc).isoformat()
                 _save_pending_trades_to_disk()
 
@@ -3021,12 +3034,15 @@ def _execution_worker():
                 tp = trade.get("tp", 0)
                 direction = trade.get("direction", "")
 
+                add_log("info", f"[ExecutionWorker] PARAMS trade_id={tid} symbol={symbol} lot={lot} entry={entry} sl={sl} tp={tp} direction={direction}")
+
                 if not symbol or lot <= 0:
                     add_log("error", f"[ExecutionWorker] INVALID_PARAMS trade_id={tid} symbol={symbol} lot={lot}")
                     _transition_state(trade, TRADE_STATE_FAILED, reason="invalid_params")
                     continue
 
                 try:
+                    add_log("info", f"[ExecutionWorker] CALLING_EXECUTE trade_id={tid}")
                     success, message = _execute_trade_from_backend(trade, symbol, lot, entry, sl, tp, direction)
                     add_log("info", f"[ExecutionWorker] EXECUTION_RESULT trade_id={tid} success={success} message={message}")
                 except Exception as exec_err:
@@ -3045,6 +3061,7 @@ def _execution_worker():
                     _transition_state(trade, TRADE_STATE_FAILED, reason=f"backend_execution_failed: {message}")
                     trade["error"] = message
                     _save_pending_trades_to_disk()
+            add_log("info", "[ExecutionWorker] LOOP_END")
         except Exception as e:
             try:
                 add_log("error", f"[ExecutionWorker] WORKER_EXCEPTION error={e}")
@@ -3060,17 +3077,21 @@ _execution_worker_thread = None
 def _start_execution_worker():
     global _execution_worker_thread
     if _execution_worker_thread is not None and _execution_worker_thread.is_alive():
+        add_log("info", "[ExecutionWorker] ALREADY_RUNNING")
         return
     _execution_worker_thread = threading.Thread(target=_execution_worker, daemon=True)
     _execution_worker_thread.start()
     add_log("info", "[ExecutionWorker] STARTED")
 
 
+# Start execution worker when module is imported, regardless of deployment method.
+# This ensures the worker runs even under gunicorn/waitress/etc.
+_start_execution_worker()
+
 def run_ui(host=None, port=None):
     host = host or FLASK_HOST
     port = port or FLASK_PORT
     add_log("info", f"UI server starting on {host}:{port}...")
-    _start_execution_worker()
     app.run(host=host, port=port, debug=False, use_reloader=False)
 
 
