@@ -127,20 +127,25 @@ bool PositionExistsForTrade(string tradeId, string symbol, string direction, dou
         if(!PositionSelectByTicket(ticket))
             continue;
 
-        string posSymbol = PositionGetString(POSITION_SYMBOL);
+        string posSymbol = "";
+        long magic = 0;
+        long type = 0;
+        double volume = 0.0;
+        
+        posSymbol = PositionGetString(POSITION_SYMBOL);
         if(posSymbol != symbol)
             continue;
 
-        long magic = PositionGetInteger(POSITION_MAGIC);
+        magic = PositionGetInteger(POSITION_MAGIC);
         if(magic != MagicNumber)
             continue;
 
-        long type = PositionGetInteger(POSITION_TYPE);
+        type = PositionGetInteger(POSITION_TYPE);
         string posDir = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
         if(posDir != direction)
             continue;
 
-        double volume = PositionGetDouble(POSITION_VOLUME);
+        volume = PositionGetDouble(POSITION_VOLUME);
         if(expectedVolume > 0 && MathAbs(volume - expectedVolume) > 0.01)
             continue;
 
@@ -329,10 +334,14 @@ void OnTimer()
             else if(PositionSelect(pendingSymbol))
             {
                 lastBeAttemptTime = TimeCurrent();
-                double curSl  = PositionGetDouble(POSITION_SL);
-                double curTp  = PositionGetDouble(POSITION_TP);
-                long   position = PositionGetInteger(POSITION_TICKET);
-                long   beDigits = (long)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS);
+                double curSl = 0.0;
+                double curTp = 0.0;
+                long position = 0;
+                
+                curSl = PositionGetDouble(POSITION_SL);
+                curTp = PositionGetDouble(POSITION_TP);
+                position = PositionGetInteger(POSITION_TICKET);
+                long beDigits = (long)SymbolInfoInteger(pendingSymbol, SYMBOL_DIGITS);
                 double bePoint  = SymbolInfoDouble(pendingSymbol, SYMBOL_POINT);
                 double stopsLevel = (double)SymbolInfoInteger(pendingSymbol, SYMBOL_TRADE_STOPS_LEVEL) * bePoint;
                 double freezeLevel = (double)SymbolInfoInteger(pendingSymbol, SYMBOL_TRADE_FREEZE_LEVEL) * bePoint;
@@ -1122,17 +1131,23 @@ void ClosePositionByTicket(long ticket, string symbol)
         return;
     }
 
-    string actualSymbol = PositionGetString(POSITION_SYMBOL);
+    string actualSymbol = "";
+    long posType = 0;
+    double posVolume = 0.0;
+    double posPriceOpen = 0.0;
+    long posTicket = 0;
+    
+    actualSymbol = PositionGetString(POSITION_SYMBOL);
     if(actualSymbol != symbol)
     {
         Log("[CLOSE_REQUEST] SYMBOL_MISMATCH ticket=" + (string)ticket + " expected=" + symbol + " actual=" + actualSymbol);
         return;
     }
 
-    long posType = PositionGetInteger(POSITION_TYPE);
-    double posVolume = PositionGetDouble(POSITION_VOLUME);
-    double posPriceOpen = PositionGetDouble(POSITION_PRICE_OPEN);
-    long posTicket = (long)PositionGetInteger(POSITION_TICKET);
+    posType = PositionGetInteger(POSITION_TYPE);
+    posVolume = PositionGetDouble(POSITION_VOLUME);
+    posPriceOpen = PositionGetDouble(POSITION_PRICE_OPEN);
+    posTicket = (long)PositionGetInteger(POSITION_TICKET);
 
     Log("[CLOSE_REQUEST] ticket=" + (string)posTicket + " symbol=" + symbol + " type=" + (string)posType + " volume=" + DoubleToString(posVolume, 2));
 
@@ -1380,11 +1395,17 @@ void ReportPosition()
     if(!PositionSelect(posSymbol))
         return;
 
-    double volume = PositionGetDouble(POSITION_VOLUME);
-    double price = PositionGetDouble(POSITION_PRICE_OPEN);
-    double sl = PositionGetDouble(POSITION_SL);
-    double tp = PositionGetDouble(POSITION_TP);
-    double profit = PositionGetDouble(POSITION_PROFIT);
+    double volume = 0.0;
+    double price = 0.0;
+    double sl = 0.0;
+    double tp = 0.0;
+    double profit = 0.0;
+    
+    volume = PositionGetDouble(POSITION_VOLUME);
+    price = PositionGetDouble(POSITION_PRICE_OPEN);
+    sl = PositionGetDouble(POSITION_SL);
+    tp = PositionGetDouble(POSITION_TP);
+    profit = PositionGetDouble(POSITION_PROFIT);
     string symbol = PositionGetString(POSITION_SYMBOL);
     long type = PositionGetInteger(POSITION_TYPE);
     string direction = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";

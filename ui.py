@@ -2594,6 +2594,13 @@ def api_prepare_trade():
         ea_symbol_info = sym or {}
         volume_max = ea_symbol_info.get("volume_max")
 
+        diff = abs(entry - sl)
+        if direction == "BUY":
+            tp = entry + diff * rr_ratio
+        else:
+            tp = entry - diff * rr_ratio
+        tp = round(tp, digits)
+
         is_valid, validation_error, validation_details = _validate_trade_executability(
             symbol, direction, entry, sl, tp, lot, risk_amount, ea_symbol_info, trade_id
         )
@@ -2604,14 +2611,6 @@ def api_prepare_trade():
                 "validation": validation_details,
                 "status": "rejected",
             }), 400
-
-        diff = abs(entry - sl)
-        if direction == "BUY":
-            tp = entry + diff * rr_ratio
-        else:
-            tp = entry - diff * rr_ratio
-
-        tp = round(tp, digits)
 
         dist_points = abs(entry - sl) / point
         dist_pips = dist_points / 10.0
