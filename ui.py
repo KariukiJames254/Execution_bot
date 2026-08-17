@@ -2582,15 +2582,6 @@ def api_prepare_trade():
         if direction == "SELL" and sl <= entry:
             return jsonify({"error": f"Invalid SL for SELL: SL must be above entry. SL={sl}, Entry={entry}"}), 400
 
-        if ENFORCE_MIN_STOP and MIN_STOP_BUFFER_PIPS > 0:
-            min_sl_distance = MIN_STOP_BUFFER_PIPS * point * 10
-            actual_distance = abs(entry - sl)
-            if actual_distance < min_sl_distance:
-                error_msg = "Trade rejected.\n\nReason:\nThe selected candle results in a stop distance of only %.1f pips.\n\nMinimum allowed: %.1f pips.\n\nPlease select a candle with a larger range." % (actual_distance / (point * 10), MIN_STOP_BUFFER_PIPS)
-                add_log("warn", error_msg.replace("\n", " "))
-                notify(f"❌ <b>Trade Rejected</b>\n{direction} {symbol}\n\nReason:\nStop too close to entry ({actual_distance / (point * 10):.1f} pips).\nMinimum allowed: {MIN_STOP_BUFFER_PIPS} pips.\n\nPlease select a candle with a larger range.")
-                return jsonify({"error": error_msg}), 400
-
         risk_amount = _get_risk_amount(data, symbol)
         rr_ratio = float(data.get("rr_ratio", RR_RATIO))
         be_rr = float(data.get("be_rr", BE_RR))
