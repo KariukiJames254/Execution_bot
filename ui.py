@@ -2309,6 +2309,195 @@ def api_preview_trade():
         return jsonify({"error": str(e)}), 500
 
 
+def _validate_trade_executability(symbol, direction, entry, sl, tp, lot, risk_amount, ea_symbol_info, trade_id=""):
+    """Validate that a trade can actually be executed before arming.
+    
+    Decision tree:
+    1. SL/TP direction
+    2. Minimum stop distance (broker + practical)
+    3. Broker volume limits
+    4. Calculate required margin + maximum affordable volume
+    5. Margin availability
+    6. Total account exposure
+    7. Expected risk validation
+    8. MAX_RISK_PER_TRADE check
+    
+    Returns (is_valid, error_message, details_dict).
+    """
+    errors = []
+    details = {
+        "trade_id": trade_id,
+        "symbol": symbol,
+        "direction": direction,
+        "entry": entry,
+        "sl": sl,
+        "tp": tp,
+        "calculated_lot": lot,
+        "risk_amount": risk_amount,
+        "requested_risk": risk_amount,
+    }
+
+    if ea_symbol_info is None:
+        return False, "Symbol information not available from EA. Cannot validate trade.", details
+
+    point = float(ea_symbol_info.get("point") or 0.00001)
+    digits = int(ea_symbol_info.get("digits", 5) or 5)
+    volume_min = float(ea_symbol_info.get("volume_min", 0.01) or 0.01)
+    volume_max = float(ea_symbol_info.get("volume_max", 100.0) or 100.0)
+    volume_step = float(ea_symbol_info.get("volume_step", 0.01) or 0.01)
+    trade_stops_level = int(ea_symbol_info.get("trade_stops_level", 0) or 0)
+    trade_freeze_level = int(ea_symbol_info.get("trade_freeze_level", 0) or 0)
+    tick_size = float(ea_symbol_info.get("trade_tick_size") or point)
+    tick_value = float(ea_symbol_info.get("trade_tick_value") or 0.0)
+
+    details["point"] = point
+    details["digits"] = digits
+    details["volume_min"] = volume_min
+    details["volume_max"] = volume_max
+    details["volume_step"] = volume_step
+    details["trade_stops_level"] = trade_stops_level
+    details["trade_freeze_level"] = trade_freeze_level
+    details["tick_size"] = tick_size
+    details["tick_value"] = tick_value
+
+    # 1. Validate SL/TP direction
+    if direction == "BUY" and sl >= entry:
+        errors.append(f"Invalid SL for BUY: SL={sl} must be below entry={entry}")
+    if direction == "SELL" and sl <= entry:
+        errors.append(f"Invalid SL for SELL: SL={sl} must be above entry={entry}")
+
+    # 2. Validate minimum stop distance against broker constraints
+    stop_distance = abs(entry - sl)
+    min_stop_distance = max(trade_stops_level, trade_freeze_level) * point
+    details["stop_distance"] = stop_distance
+    details["min_stop_distance"] = min_stop_distance
+    details["stop_distance_pips"] = stop_distance / (point * 10) if point > 0 else 0
+
+    if stop_distance < min_stop_distance:
+        errors.append(
+            f"Stop distance too small: {details['stop_distance_pips']:.1f} pips. "
+            f"Broker minimum: {min_stop_distance / (point * 10):.1f} pips. "
+            f"Stops level={trade_stops_level}, Freeze level={trade_freeze_level}."
+        )
+
+    # 3. Validate calculated lot against broker limits
+    if lot < volume_min:
+        errors.append(f"Calculated lot {lot:.2f} is below broker minimum {volume_min:.2f}")
+    if lot > volume_max:
+        errors.append(
+            f"Calculated lot {lot:.2f} exceeds broker maximum {volume_max:.2f}. "
+            f"Risk: ${risk_amount:.2f}, SL Distance: {details['stop_distance_pips']:.1f} pips, "
+            f"Calculated Lot: {lot:.2f}, Broker Maximum: {volume_max:.2f}"
+        )
+
+    # 4. Calculate maximum affordable volume based on margin
+    maximum_affordable_volume = volume_max
+    required_margin_for_calc = 0
+    free_margin = 0
+    balance = 0
+    equity = 0
+    margin_level = 0
+    
+    if mt5 is not None:
+        try:
+            from broker import ensure_connected
+            if ensure_connected():
+                order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
+                account = mt5.account_info()
+                if account is not None:
+                    free_margin = account.margin_free
+                    balance = account.balance
+                    equity = account.equity
+                    margin_level = account.margin_level
+                    details["free_margin"] = free_margin
+                    details["balance"] = balance
+                    details["equity"] = equity
+                    details["margin_level"] = margin_level
+
+                    # Calculate required margin for the requested lot
+                    required_margin_for_calc = mt5.order_calc_margin(order_type, symbol, lot, entry)
+                    details["required_margin"] = required_margin_for_calc
+
+                    # Calculate maximum affordable volume dynamically
+                    if free_margin > 0 and volume_step > 0:
+                        # Start from volume_max and work down to find max affordable
+                        test_lot = volume_max
+                        max_affordable = volume_min
+                        step = volume_step
+                        for i in range(200):
+                            test_margin = mt5.order_calc_margin(order_type, symbol, test_lot, entry)
+                            if test_margin <= free_margin:
+                                max_affordable = test_lot
+                                break
+                            test_lot = test_lot - step
+                            if test_lot < volume_min:
+                                break
+                        maximum_affordable_volume = max(volume_min, max_affordable)
+                        details["maximum_affordable_volume"] = maximum_affordable_volume
+                    else:
+                        details["maximum_affordable_volume"] = volume_min
+
+                    # Check if requested lot exceeds maximum affordable
+                    if lot > maximum_affordable_volume:
+                        errors.append(
+                            f"Insufficient margin for requested volume. "
+                            f"Requested lot: {lot:.2f}, Maximum affordable: {maximum_affordable_volume:.2f}, "
+                            f"Required margin: ${required_margin_for_calc:.2f}, Free margin: ${free_margin:.2f}, "
+                            f"Balance: ${balance:.2f}, Equity: ${equity:.2f}"
+                        )
+
+                    # 6. Validate expected risk after normalization
+                    if tick_value > 0 and tick_size > 0 and stop_distance > 0:
+                        distance_ticks = stop_distance / tick_size
+                        loss_per_lot = tick_value * distance_ticks
+                        expected_loss = loss_per_lot * lot
+                        details["expected_loss_at_sl"] = expected_loss
+                        details["loss_per_lot"] = loss_per_lot
+                        details["distance_ticks"] = distance_ticks
+                        details["required_margin"] = required_margin_for_calc
+
+                        risk_diff = abs(expected_loss - risk_amount)
+                        risk_diff_pct = (risk_diff / risk_amount * 100) if risk_amount > 0 else 100
+                        if risk_diff_pct > 10:
+                            errors.append(
+                                f"Risk validation failed. Expected loss at SL: ${expected_loss:.2f}, "
+                                f"Requested risk: ${risk_amount:.2f}, "
+                                f"Difference: ${risk_diff:.2f} ({risk_diff_pct:.1f}%). "
+                                f"Normalized lot {lot:.2f} does not match intended risk."
+                            )
+        except Exception as e:
+            add_log("warn", f"[PreArmValidation] Margin check failed: {e}")
+
+    # 7. Validate MAX_RISK_PER_TRADE
+    from config import MAX_RISK_PER_TRADE
+    if risk_amount > MAX_RISK_PER_TRADE:
+        errors.append(
+            f"Risk per trade ${risk_amount:.2f} exceeds maximum allowed ${MAX_RISK_PER_TRADE:.2f}. "
+            f"Reduce risk amount or adjust MAX_RISK_PER_TRADE configuration."
+        )
+
+    # Log all details
+    add_log("info", f"[PreArmValidation] symbol={symbol} direction={direction} entry={entry} sl={sl} tp={tp} "
+                    f"lot={lot:.2f} risk={risk_amount:.2f} stop_dist={stop_distance:.5f} "
+                    f"tick_value={tick_value:.6f} tick_size={tick_size:.8f} point={point:.8f} "
+                    f"volume_min={volume_min} volume_max={volume_max} volume_step={volume_step} "
+                    f"stops_level={trade_stops_level} freeze_level={trade_freeze_level} "
+                    f"max_affordable={maximum_affordable_volume:.2f} required_margin={required_margin_for_calc:.2f} "
+                    f"free_margin={free_margin:.2f} errors={len(errors)}")
+
+    if errors:
+        error_msg = "\n".join(errors)
+        add_log("warn", f"[PreArmValidation] REJECTED trade_id={trade_id}: {error_msg}")
+        try:
+            notify(f"❌ <b>Trade Rejected</b>\n{direction} {symbol}\n\n{error_msg}")
+        except Exception:
+            pass
+        return False, error_msg, details
+
+    add_log("success", f"[PreArmValidation] PASSED trade_id={trade_id} symbol={symbol} direction={direction} lot={lot:.2f}")
+    return True, "", details
+
+
 @app.route("/api/prepare_trade", methods=["POST"])
 def api_prepare_trade():
     try:
@@ -2407,9 +2596,23 @@ def api_prepare_trade():
         be_rr = float(data.get("be_rr", BE_RR))
 
         lot = calculate_lot_from_risk(entry, sl, risk_amount, symbol=symbol)
-        if volume_max is not None and lot > volume_max:
-            add_log("warn", f"Calculated lot {lot} exceeds broker max {volume_max}. Capping.")
-            lot = volume_max
+
+        # DO NOT silently clamp lot size. Validate instead.
+        # If calculated lot exceeds broker limits, the trade must be rejected before arming.
+        sym = ea_state.get("symbols", {}).get(symbol)
+        ea_symbol_info = sym or {}
+        volume_max = ea_symbol_info.get("volume_max")
+
+        is_valid, validation_error, validation_details = _validate_trade_executability(
+            symbol, direction, entry, sl, tp, lot, risk_amount, ea_symbol_info, trade_id
+        )
+        if not is_valid:
+            add_log("warn", f"[PreArmValidation] BLOCKED trade_id={trade_id} error={validation_error}")
+            return jsonify({
+                "error": f"Trade rejected: {validation_error}",
+                "validation": validation_details,
+                "status": "rejected",
+            }), 400
 
         diff = abs(entry - sl)
         if direction == "BUY":

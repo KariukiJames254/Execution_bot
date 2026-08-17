@@ -1631,3 +1631,4 @@ void ReportCandleFor(string symbol, ENUM_TIMEFRAMES tf)
     }
 }
 //+------------------------------------------------------------------+
+ 
